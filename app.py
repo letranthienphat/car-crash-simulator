@@ -1,367 +1,358 @@
 import streamlit as st
-import numpy as np
 import random
 import time
 import math
 
-st.set_page_config(page_title="Car Crash Simulator", layout="wide")
-st.title("🚗 Car Crash Simulator")
+st.set_page_config(page_title="Car Crash Game", layout="wide")
 
 # Khởi tạo session state
-if 'game_state' not in st.session_state:
-    st.session_state.game_state = 'menu'
+if 'game_started' not in st.session_state:
+    st.session_state.game_started = False
+if 'player_lane' not in st.session_state:
+    st.session_state.player_lane = 2  # 1, 2, hoặc 3
 if 'score' not in st.session_state:
     st.session_state.score = 0
-if 'player_pos' not in st.session_state:
-    st.session_state.player_pos = 2  # Làn 1, 2, hoặc 3
-if 'player_speed' not in st.session_state:
-    st.session_state.player_speed = 5
+if 'damage' not in st.session_state:
+    st.session_state.damage = 0
 if 'ai_cars' not in st.session_state:
     st.session_state.ai_cars = []
 if 'obstacles' not in st.session_state:
     st.session_state.obstacles = []
-if 'damage' not in st.session_state:
-    st.session_state.damage = 0
 if 'game_time' not in st.session_state:
     st.session_state.game_time = 0
-if 'last_update' not in st.session_state:
-    st.session_state.last_update = time.time()
+
+# CSS custom
+st.markdown("""
+<style>
+    .game-container {
+        background-color: #87CEEB;
+        padding: 20px;
+        border-radius: 10px;
+        margin: 20px 0;
+    }
+    .road {
+        background-color: #696969;
+        height: 500px;
+        position: relative;
+        margin: 0 auto;
+        width: 300px;
+        border: 5px solid #333;
+    }
+    .lane {
+        border-right: 2px dashed white;
+        height: 100%;
+        position: absolute;
+    }
+    .player-car {
+        background-color: #0066cc;
+        color: white;
+        width: 50px;
+        height: 80px;
+        position: absolute;
+        bottom: 50px;
+        border-radius: 5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        transition: left 0.3s;
+    }
+    .ai-car {
+        background-color: #cc0000;
+        color: white;
+        width: 50px;
+        height: 80px;
+        position: absolute;
+        border-radius: 5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+    }
+    .obstacle {
+        background-color: #ff9900;
+        width: 30px;
+        height: 40px;
+        position: absolute;
+        border-radius: 3px;
+    }
+    .road-line {
+        background-color: white;
+        height: 20px;
+        width: 5px;
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+    }
+    .stats {
+        background-color: rgba(0,0,0,0.7);
+        color: white;
+        padding: 10px;
+        border-radius: 5px;
+        margin: 10px 0;
+    }
+    .controls {
+        display: flex;
+        justify-content: center;
+        gap: 10px;
+        margin: 20px 0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Sidebar
 with st.sidebar:
-    st.header("⚙️ Cài Đặt")
+    st.title("🚗 Car Crash Game")
+    st.markdown("---")
     
-    if st.button("🔄 Khởi động lại game", type="primary"):
-        st.session_state.game_state = 'playing'
+    if st.button("🎮 Bắt đầu chơi", type="primary", use_container_width=True):
+        st.session_state.game_started = True
+        st.session_state.player_lane = 2
         st.session_state.score = 0
-        st.session_state.player_pos = 2
-        st.session_state.player_speed = 5
+        st.session_state.damage = 0
         st.session_state.ai_cars = []
         st.session_state.obstacles = []
-        st.session_state.damage = 0
-        st.session_state.game_time = 0
+        st.session_state.game_time = time.time()
+        st.rerun()
+    
+    if st.button("🔄 Chơi lại", use_container_width=True):
+        st.session_state.game_started = False
         st.rerun()
     
     st.markdown("---")
-    st.subheader("🎮 Điều khiển")
+    st.subheader("Điều khiển")
     st.markdown("""
     - **A**: Sang trái
     - **D**: Sang phải
-    - **W**: Tăng tốc
-    - **S**: Giảm tốc
+    - **Rút lui**: Tự động tránh
     """)
     
     st.markdown("---")
-    st.subheader("📊 Thống kê")
-    st.metric("Điểm số", st.session_state.score)
-    st.metric("Hư hại", f"{st.session_state.damage}%")
-    st.metric("Tốc độ", f"{st.session_state.player_speed} km/h")
-
-# Hàm vẽ game
-def draw_game():
-    # Tạo canvas đơn giản bằng HTML
-    lanes = 3
-    road_width = 300
-    lane_width = road_width // lanes
-    
-    # Tạo HTML cho game
-    html = f"""
-    <style>
-        .game-container {{
-            position: relative;
-            width: {road_width + 100}px;
-            height: 600px;
-            margin: 0 auto;
-            background: linear-gradient(to bottom, #87CEEB, #4682B4);
-            overflow: hidden;
-        }}
-        .road {{
-            position: absolute;
-            left: 50px;
-            top: 0;
-            width: {road_width}px;
-            height: 100%;
-            background: #696969;
-        }}
-        .lane-line {{
-            position: absolute;
-            left: {lane_width}px;
-            top: 0;
-            width: 2px;
-            height: 100%;
-            background: white;
-        }}
-        .lane-line-2 {{
-            left: {lane_width * 2}px;
-        }}
-        .player-car {{
-            position: absolute;
-            left: {50 + (st.session_state.player_pos - 0.5) * lane_width - 15}px;
-            bottom: 100px;
-            width: 30px;
-            height: 50px;
-            background: blue;
-            border-radius: 5px;
-            text-align: center;
-            color: white;
-            line-height: 50px;
-            font-weight: bold;
-        }}
-        .ai-car {{
-            position: absolute;
-            width: 30px;
-            height: 50px;
-            background: red;
-            border-radius: 5px;
-            text-align: center;
-            color: white;
-            line-height: 50px;
-            font-weight: bold;
-        }}
-        .obstacle {{
-            position: absolute;
-            width: 20px;
-            height: 30px;
-            background: orange;
-            border-radius: 3px;
-        }}
-        .score {{
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            color: white;
-            font-size: 20px;
-            font-weight: bold;
-            background: rgba(0,0,0,0.5);
-            padding: 5px 10px;
-            border-radius: 5px;
-        }}
-        .damage-bar {{
-            position: absolute;
-            top: 50px;
-            left: 10px;
-            width: 200px;
-            height: 20px;
-            background: rgba(0,0,0,0.5);
-            border-radius: 5px;
-            overflow: hidden;
-        }}
-        .damage-fill {{
-            height: 100%;
-            background: red;
-            width: {st.session_state.damage}%;
-        }}
-    </style>
-    
-    <div class="game-container">
-        <div class="road">
-            <div class="lane-line"></div>
-            <div class="lane-line lane-line-2"></div>
-            
-            <!-- Vạch kẻ đường -->
-            <div style="position: absolute; left: {road_width/2 - 25}px; top: calc(var(--offset) * -100px); width: 50px; height: 30px; background: white;"></div>
-            
-            <!-- Xe người chơi -->
-            <div class="player-car">P</div>
-            
-            <!-- Xe AI -->
-    """
-    
-    # Thêm xe AI
-    for i, car in enumerate(st.session_state.ai_cars):
-        lane, pos = car
-        html += f"""
-            <div class="ai-car" style="left: {50 + (lane - 0.5) * lane_width - 15}px; top: {pos}px;">AI</div>
-        """
-    
-    # Thêm vật cản
-    for i, obs in enumerate(st.session_state.obstacles):
-        lane, pos = obs
-        html += f"""
-            <div class="obstacle" style="left: {50 + (lane - 0.5) * lane_width - 10}px; top: {pos}px;"></div>
-        """
-    
-    html += f"""
-            <!-- Điểm số -->
-            <div class="score">Điểm: {st.session_state.score}</div>
-            
-            <!-- Thanh hư hại -->
-            <div class="damage-bar">
-                <div class="damage-fill"></div>
-            </div>
-            <div style="position: absolute; top: 50px; left: 220px; color: white; font-weight: bold;">
-                Hư hại: {st.session_state.damage}%
-            </div>
-        </div>
-    </div>
-    
-    <script>
-        // Thêm hiệu ứng vạch kẻ đường di chuyển
-        document.addEventListener('DOMContentLoaded', function() {{
-            const road = document.querySelector('.road');
-            let offset = 0;
-            
-            function animateRoad() {{
-                offset = (offset + 0.5) % 100;
-                road.style.setProperty('--offset', offset);
-                requestAnimationFrame(animateRoad);
-            }}
-            
-            animateRoad();
-        }});
-    </script>
-    """
-    
-    return html
-
-# Hàm cập nhật game
-def update_game():
-    current_time = time.time()
-    
-    # Tạo xe AI mới
-    if random.random() < 0.1:
-        lane = random.randint(1, 3)
-        st.session_state.ai_cars.append([lane, -50])
-    
-    # Tạo vật cản mới
-    if random.random() < 0.05:
-        lane = random.randint(1, 3)
-        st.session_state.obstacles.append([lane, -30])
-    
-    # Di chuyển xe AI
-    new_ai_cars = []
-    for car in st.session_state.ai_cars:
-        lane, pos = car
-        new_pos = pos + 3 + random.random() * 2
-        
-        # Kiểm tra va chạm với xe player
-        if (lane == st.session_state.player_pos and 
-            abs(new_pos - 500) < 70):  # 500 là vị trí Y của xe player
-            st.session_state.damage = min(100, st.session_state.damage + 20)
-            st.session_state.score = max(0, st.session_state.score - 10)
-        elif new_pos < 600:
-            new_ai_cars.append([lane, new_pos])
-        else:
-            st.session_state.score += 10
-    
-    st.session_state.ai_cars = new_ai_cars
-    
-    # Di chuyển vật cản
-    new_obstacles = []
-    for obs in st.session_state.obstacles:
-        lane, pos = obs
-        new_pos = pos + st.session_state.player_speed
-        
-        # Kiểm tra va chạm
-        if (lane == st.session_state.player_pos and 
-            abs(new_pos - 500) < 50):
-            st.session_state.damage = min(100, st.session_state.damage + 30)
-            st.session_state.score = max(0, st.session_state.score - 15)
-        elif new_pos < 600:
-            new_obstacles.append([lane, new_pos])
-        else:
-            st.session_state.score += 5
-    
-    st.session_state.obstacles = new_obstacles
-    
-    # Cập nhật thời gian
-    st.session_state.game_time += 1
-    st.session_state.last_update = current_time
-    
-    # Kiểm tra game over
-    if st.session_state.damage >= 100:
-        st.session_state.game_state = 'game_over'
-
-# Main app
-if st.session_state.game_state == 'menu':
+    st.subheader("Luật chơi")
     st.markdown("""
-    <div style='text-align: center; padding: 50px;'>
-        <h1>🚗 Car Crash Simulator</h1>
-        <h3>Trò chơi đua xe với vật lý va chạm</h3>
-        <br><br>
-        <p>Tránh xe AI và vật cản để sống sót lâu nhất!</p>
-        <p>Điều khiển xe của bạn bằng các phím A/D hoặc nút bên dưới.</p>
-        <br><br>
-    </div>
-    """, unsafe_allow_html=True)
+    1. Tránh xe AI màu đỏ
+    2. Tránh vật cản màu cam
+    3. Giữ hư hại dưới 100%
+    4. Tăng điểm bằng cách sống lâu
+    """)
+
+# Main game area
+if not st.session_state.game_started:
+    st.title("🚗 Car Crash Simulator")
+    st.markdown("---")
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if st.button("🎮 Bắt đầu chơi", type="primary", use_container_width=True, size="large"):
-            st.session_state.game_state = 'playing'
+        st.markdown("""
+        <div style='text-align: center;'>
+            <h2>Chào mừng đến với trò chơi!</h2>
+            <p>Điều khiển xe màu xanh dương, tránh xe AI và vật cản.</p>
+            <p>Nhấn <strong>Bắt đầu chơi</strong> để bắt đầu!</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if st.button("🎮 BẮT ĐẦU CHƠI", type="primary", size="large", use_container_width=True):
+            st.session_state.game_started = True
+            st.session_state.game_time = time.time()
             st.rerun()
 
-elif st.session_state.game_state == 'playing':
-    # Điều khiển
-    col1, col2, col3, col4, col5 = st.columns(5)
+else:
+    # Game đang chạy
+    col1, col2, col3 = st.columns([2, 1, 2])
+    
     with col1:
-        if st.button("⬅️ A - Trái", use_container_width=True):
-            st.session_state.player_pos = max(1, st.session_state.player_pos - 1)
+        # Game stats
+        current_time = time.time()
+        elapsed_time = int(current_time - st.session_state.game_time)
+        
+        st.markdown(f"""
+        <div class="stats">
+            <h3>📊 Thống kê</h3>
+            <p>⏱️ Thời gian: {elapsed_time}s</p>
+            <p>🏆 Điểm số: {st.session_state.score}</p>
+            <p>⚠️ Hư hại: {st.session_state.damage}%</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Điều khiển
+        st.markdown("<h3>🎮 Điều khiển</h3>", unsafe_allow_html=True)
+        control_col1, control_col2, control_col3 = st.columns(3)
+        with control_col1:
+            if st.button("⬅️ Trái (A)", use_container_width=True):
+                st.session_state.player_lane = max(1, st.session_state.player_lane - 1)
+                st.rerun()
+        with control_col2:
+            if st.button("⏹️ Dừng", use_container_width=True):
+                st.session_state.game_started = False
+                st.rerun()
+        with control_col3:
+            if st.button("➡️ Phải (D)", use_container_width=True):
+                st.session_state.player_lane = min(3, st.session_state.player_lane + 1)
+                st.rerun()
+    
     with col2:
-        if st.button("➡️ D - Phải", use_container_width=True):
-            st.session_state.player_pos = min(3, st.session_state.player_pos + 1)
+        # Game area
+        st.markdown("""
+        <div class="game-container">
+            <div class="road" id="road">
+                <!-- Lanes -->
+                <div class="lane" style="left: 100px;"></div>
+                <div class="lane" style="left: 200px;"></div>
+                
+                <!-- Road lines (animated with JS) -->
+                <div id="road-lines"></div>
+                
+                <!-- Player car -->
+                <div class="player-car" id="player-car">
+                    BẠN
+                </div>
+            </div>
+        </div>
+        
+        <script>
+        // Position player car
+        const playerLane = """ + str(st.session_state.player_lane) + """;
+        const car = document.getElementById('player-car');
+        if (car) {
+            const positions = [25, 125, 225];
+            car.style.left = positions[playerLane - 1] + 'px';
+        }
+        
+        // Create road lines
+        const roadLines = document.getElementById('road-lines');
+        if (roadLines) {
+            roadLines.innerHTML = '';
+            for (let i = -50; i < 550; i += 60) {
+                const line = document.createElement('div');
+                line.className = 'road-line';
+                line.style.top = i + 'px';
+                roadLines.appendChild(line);
+            }
+        }
+        
+        // Animate road lines
+        let lineOffset = 0;
+        function animateRoad() {
+            lineOffset = (lineOffset + 5) % 60;
+            const lines = document.querySelectorAll('.road-line');
+            lines.forEach((line, index) => {
+                const top = (index * 60 + lineOffset) % 600;
+                line.style.top = top + 'px';
+            });
+            requestAnimationFrame(animateRoad);
+        }
+        
+        // Add AI cars and obstacles from Python
+        const road = document.getElementById('road');
+        
+        // AI cars
+        """ + f"""
+        const aiCars = {st.session_state.ai_cars};
+        aiCars.forEach(car => {{
+            const aiCar = document.createElement('div');
+            aiCar.className = 'ai-car';
+            aiCar.textContent = 'AI';
+            const positions = [25, 125, 225];
+            aiCar.style.left = positions[car.lane - 1] + 'px';
+            aiCar.style.top = car.position + 'px';
+            road.appendChild(aiCar);
+        }});
+        
+        // Obstacles
+        const obstacles = {st.session_state.obstacles};
+        obstacles.forEach(obs => {{
+            const obstacle = document.createElement('div');
+            obstacle.className = 'obstacle';
+            const positions = [35, 135, 235];
+            obstacle.style.left = positions[obs.lane - 1] + 'px';
+            obstacle.style.top = obs.position + 'px';
+            road.appendChild(obstacle);
+        }});
+        """ + """
+        
+        animateRoad();
+        </script>
+        """, unsafe_allow_html=True)
+    
     with col3:
-        if st.button("⬆️ W - Nhanh", use_container_width=True):
-            st.session_state.player_speed = min(10, st.session_state.player_speed + 1)
-    with col4:
-        if st.button("⬇️ S - Chậm", use_container_width=True):
-            st.session_state.player_speed = max(1, st.session_state.player_speed - 1)
-    with col5:
-        if st.button("⏹️ Dừng", use_container_width=True):
-            st.session_state.game_state = 'paused'
-    
-    # Hiển thị game
-    st.components.v1.html(draw_game(), height=650)
-    
-    # Auto-update
-    if time.time() - st.session_state.last_update > 0.1:
-        update_game()
+        # Game log
+        st.markdown("<h3>📝 Nhật ký trò chơi</h3>", unsafe_allow_html=True)
+        
+        # Tạo sự kiện ngẫu nhiên
+        if random.random() < 0.3:
+            event_type = random.choice(["ai_spawn", "obstacle_spawn", "near_miss"])
+            
+            if event_type == "ai_spawn" and len(st.session_state.ai_cars) < 5:
+                lane = random.randint(1, 3)
+                st.session_state.ai_cars.append({
+                    "lane": lane,
+                    "position": random.randint(-100, 50)
+                })
+                st.info(f"🚗 Xe AI xuất hiện ở làn {lane}")
+            
+            elif event_type == "obstacle_spawn" and len(st.session_state.obstacles) < 3:
+                lane = random.randint(1, 3)
+                st.session_state.obstacles.append({
+                    "lane": lane,
+                    "position": random.randint(-50, 100)
+                })
+                st.warning(f"⚠️ Vật cản xuất hiện ở làn {lane}")
+        
+        # Kiểm tra va chạm
+        player_lane = st.session_state.player_lane
+        
+        for ai_car in st.session_state.ai_cars[:]:
+            ai_car["position"] += 10  # Di chuyển AI xuống
+            
+            # Nếu AI đã vượt qua player
+            if ai_car["position"] > 500:
+                st.session_state.ai_cars.remove(ai_car)
+                st.session_state.score += 10
+                st.success("✅ Vượt qua xe AI! +10 điểm")
+            
+            # Kiểm tra va chạm
+            elif (ai_car["lane"] == player_lane and 
+                  400 < ai_car["position"] < 500):
+                st.session_state.damage = min(100, st.session_state.damage + 20)
+                st.session_state.ai_cars.remove(ai_car)
+                st.error("💥 Va chạm với xe AI! +20% hư hại")
+        
+        for obstacle in st.session_state.obstacles[:]:
+            obstacle["position"] += 8  # Di chuyển vật cản xuống
+            
+            # Nếu vật cản đã vượt qua player
+            if obstacle["position"] > 500:
+                st.session_state.obstacles.remove(obstacle)
+                st.session_state.score += 5
+                st.success("✅ Vượt qua vật cản! +5 điểm")
+            
+            # Kiểm tra va chạm
+            elif (obstacle["lane"] == player_lane and 
+                  420 < obstacle["position"] < 500):
+                st.session_state.damage = min(100, st.session_state.damage + 15)
+                st.session_state.obstacles.remove(obstacle)
+                st.error("💥 Va chạm với vật cản! +15% hư hại")
+        
+        # Tăng điểm theo thời gian
+        if random.random() < 0.5:
+            st.session_state.score += 1
+        
+        # Kiểm tra game over
+        if st.session_state.damage >= 100:
+            st.session_state.game_started = False
+            st.error("💥 GAME OVER! Xe của bạn đã bị hỏng hoàn toàn!")
+            st.balloons()
+            st.stop()
+        
+        # Auto-refresh game
+        time.sleep(0.5)
         st.rerun()
 
-elif st.session_state.game_state == 'paused':
-    st.warning("⏸️ Game đã tạm dừng")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("▶️ Tiếp tục", use_container_width=True):
-            st.session_state.game_state = 'playing'
-            st.session_state.last_update = time.time()
-            st.rerun()
-    with col2:
-        if st.button("🔄 Chơi lại", use_container_width=True):
-            st.session_state.game_state = 'menu'
-            st.rerun()
-    
-    st.components.v1.html(draw_game(), height=650)
-
-elif st.session_state.game_state == 'game_over':
-    st.error("💥 GAME OVER! Xe của bạn đã bị hỏng hoàn toàn!")
-    st.success(f"🏆 Điểm số cuối cùng: {st.session_state.score}")
-    
-    # Hiển thị thống kê
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Thời gian sống", f"{st.session_state.game_time // 10} giây")
-    with col2:
-        st.metric("Số xe AI tránh được", f"{st.session_state.score // 10}")
-    with col3:
-        st.metric("Mức độ hư hại", "100%")
-    
-    if st.button("🔄 Chơi lại", type="primary"):
-        st.session_state.game_state = 'menu'
-        st.rerun()
-
-# Thông tin thêm
+# Footer
 st.markdown("---")
 st.markdown("""
-### 🎮 Cách chơi:
-1. Sử dụng nút **A/D** hoặc **Trái/Phải** để chuyển làn
-2. Sử dụng **W/S** hoặc **Nhanh/Chậm** để điều chỉnh tốc độ
-3. Tránh xe **AI** (màu đỏ) và vật cản (màu cam)
-4. Giữ mức hư hại dưới 100%
-
-### ⚠️ Vật lý va chạm:
-- Va chạm với xe AI: +20% hư hại
-- Va chạm với vật cản: +30% hư hại
-- Tốc độ càng cao, va chạm càng mạnh
-""")
+<div style='text-align: center; color: gray;'>
+    <p>Car Crash Game - Built with Streamlit</p>
+    <p>Chơi an toàn, lái xe có trách nhiệm!</p>
+</div>
+""", unsafe_allow_html=True)
