@@ -7,9 +7,6 @@ import json
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional
 from enum import Enum
-from PIL import Image, ImageDraw, ImageFont
-import io
-import base64
 
 # ==================== CẤU HÌNH HỆ THỐNG ====================
 st.set_page_config(
@@ -46,387 +43,46 @@ class Vec2:
     def distance(self, other):
         return math.sqrt((self.x - other.x)**2 + (self.y - other.y)**2)
 
-class PixelParticle:
-    """Pixel vỡ ra khi va chạm"""
-    def __init__(self, position: Vec2, color: Tuple[int, int, int], size: int = 3):
-        self.position = position
-        self.velocity = Vec2(random.uniform(-5, 5), random.uniform(-5, 5))
-        self.color = color
-        self.size = size
-        self.life = 1.0
-        self.gravity = Vec2(0, 0.5)
-        self.friction = 0.98
-        
-    def update(self):
-        self.velocity = self.velocity + self.gravity
-        self.velocity = Vec2(self.velocity.x * self.friction, self.velocity.y * self.friction)
-        self.position = self.position + self.velocity
-        self.life -= 0.02
-        self.size = max(1, self.size * 0.95)
-        
-    def is_alive(self):
-        return self.life > 0
-
-class Car:
-    def __init__(self, x: float, y: float, color: Tuple[int, int, int], is_player: bool = False):
-        self.position = Vec2(x, y)
-        self.velocity = Vec2(0, 0)
-        self.acceleration = Vec2(0, 0)
-        self.angle = 0
-        self.color = color
-        self.width = 30 if is_player else 25
-        self.height = 50 if is_player else 45
-        self.max_speed = 8 if is_player else random.uniform(3, 6)
-        self.acceleration_rate = 0.2 if is_player else 0.1
-        self.braking_rate = 0.3
-        self.steering_rate = 0.15 if is_player else 0.08
-        self.is_player = is_player
-        self.damage = 0
-        self.health = 100
-        self.crash_particles = []
-        self.crash_cooldown = 0
-        self.trail_particles = []
-        self.last_trail_time = 0
-        
-        if not is_player:
-            self.ai_target = Vec2(random.uniform(0, 2000), random.uniform(0, 2000))
-            self.ai_change_time = random.uniform(2, 5)
-            self.ai_timer = 0
-        
-    def update(self, dt: float, obstacles: List['Obstacle'], cars: List['Car']):
-        if self.is_player:
-            self.update_player(dt)
-        else:
-            self.update_ai(dt)
-            
-        # Cập nhật vị trí
-        self.velocity = self.velocity + self.acceleration
-        self.velocity = Vec2(
-            max(-self.max_speed, min(self.max_speed, self.velocity.x)),
-            max(-self.max_speed, min(self.max_speed, self.velocity.y))
-        )
-        self.position = self.position + self.velocity
-        
-        # Giảm tốc độ tự nhiên
-        self.velocity = Vec2(self.velocity.x * 0.98, self.velocity.y * 0.98)
-        self.acceleration = Vec2(0, 0)
-        
-        # Cập nhật particles va chạm
-        for particle in self.crash_particles[:]:
-            particle.update()
-            if not particle.is_alive():
-                self.crash_particles.remove(particle)
-                
-        # Tạo vết lốp
-        current_time = time.time()
-        speed = self.velocity.magnitude()
-        if speed > 2 and current_time - self.last_trail_time > 0.1:
-            trail_pos = Vec2(
-                self.position.x - math.cos(math.radians(self.angle)) * self.height/2,
-                self.position.y - math.sin(math.radians(self.angle)) * self.height/2
-            )
-            self.trail_particles.append(PixelParticle(
-                trail_pos,
-                (100, 100, 100),
-                size=random.randint(2, 4)
-            ))
-            self.last_trail_time = current_time
-            
-        # Giới hạn số lượng trail particles
-        if len(self.trail_particles) > 50:
-            self.trail_particles = self.trail_particles[-50:]
-            
-        # Cập nhật trail particles
-        for particle in self.trail_particles:
-            particle.update()
-            particle.life -= 0.01
-            
-        self.trail_particles = [p for p in self.trail_particles if p.is_alive()]
-        
-        # Giảm crash cooldown
-        if self.crash_cooldown > 0:
-            self.crash_cooldown -= dt
-            
-    def update_player(self, dt: float):
-        # Điều khiển từ người chơi
-        keys = st.session_state.keys_pressed
-        
-        # Tăng tốc
-        if keys.get('up', False):
-            rad = math.radians(self.angle)
-            self.acceleration = Vec2(
-                math.cos(rad) * self.acceleration_rate,
-                math.sin(rad) * self.acceleration_rate
-            )
-            
-        # Phanh
-        if keys.get('down', False):
-            self.velocity = Vec2(self.velocity.x * 0.9, self.velocity.y * 0.9)
-            
-        # Lái trái
-        if keys.get('left', False):
-            self.angle -= 3
-            
-        # Lái phải
-        if keys.get('right', False):
-            self.angle += 3
-            
-        # Phanh tay
-        if keys.get('space', False):
-            self.velocity = Vec2(self.velocity.x * 0.7, self.velocity.y * 0.7)
-            
-    def update_ai(self, dt: float):
-        self.ai_timer += dt
-        
-        if self.ai_timer >= self.ai_change_time:
-            self.ai_target = Vec2(
-                random.uniform(0, 2000),
-                random.uniform(0, 2000)
-            )
-            self.ai_timer = 0
-            
-        # Di chuyển về phía target
-        direction = Vec2(
-            self.ai_target.x - self.position.x,
-            self.ai_target.y - self.position.y
-        )
-        
-        if direction.magnitude() > 10:
-            direction = direction.normalize()
-            self.acceleration = Vec2(
-                direction.x * self.acceleration_rate,
-                direction.y * self.acceleration_rate
-            )
-            
-            # Cập nhật góc
-            target_angle = math.degrees(math.atan2(direction.y, direction.x))
-            angle_diff = (target_angle - self.angle) % 360
-            if angle_diff > 180:
-                angle_diff -= 360
-            self.angle += angle_diff * self.steering_rate * dt * 60
-            
-    def apply_crash(self, force: float, other_pos: Vec2):
-        if self.crash_cooldown > 0:
-            return
-            
-        self.crash_cooldown = 10
-        
-        # Giảm máu
-        self.health -= force * 2
-        self.damage += force * 2
-        
-        # Tạo particles pixel vỡ ra
-        num_particles = int(force * 5)
-        for _ in range(num_particles):
-            particle_color = (
-                min(255, self.color[0] + random.randint(-50, 50)),
-                min(255, self.color[1] + random.randint(-50, 50)),
-                min(255, self.color[2] + random.randint(-50, 50))
-            )
-            
-            # Vị trí va chạm
-            crash_pos = Vec2(
-                (self.position.x + other_pos.x) / 2,
-                (self.position.y + other_pos.y) / 2
-            )
-            
-            self.crash_particles.append(PixelParticle(
-                crash_pos,
-                particle_color,
-                size=random.randint(2, 6)
-            ))
-            
-        # Đẩy xe ra
-        direction = Vec2(
-            self.position.x - other_pos.x,
-            self.position.y - other_pos.y
-        ).normalize()
-        self.velocity = self.velocity + direction * force
-        
-    def get_bounding_box(self):
-        return {
-            'x': self.position.x - self.width/2,
-            'y': self.position.y - self.height/2,
-            'width': self.width,
-            'height': self.height
-        }
-
-class Building:
-    def __init__(self, x: float, y: float, width: int, height: int, color: Tuple[int, int, int]):
-        self.position = Vec2(x, y)
-        self.width = width
-        self.height = height
-        self.color = color
-        self.window_color = (200, 200, 255)
-        
-    def get_bounding_box(self):
-        return {
-            'x': self.position.x - self.width/2,
-            'y': self.position.y - self.height/2,
-            'width': self.width,
-            'height': self.height
-        }
-
-class Tree:
-    def __init__(self, x: float, y: float, size: int):
-        self.position = Vec2(x, y)
-        self.size = size
-        self.trunk_color = (101, 67, 33)
-        self.leaves_color = (34, 139, 34)
-        
-    def get_bounding_box(self):
-        return {
-            'x': self.position.x - self.size/2,
-            'y': self.position.y - self.size/2,
-            'width': self.size,
-            'height': self.size
-        }
-
-class TrafficLight:
-    def __init__(self, x: float, y: float):
-        self.position = Vec2(x, y)
-        self.state = random.choice(['red', 'yellow', 'green'])
-        self.timer = random.uniform(0, 10)
-        self.cycle_time = 10
-        
-    def update(self, dt: float):
-        self.timer += dt
-        if self.timer >= self.cycle_time:
-            self.timer = 0
-            if self.state == 'red':
-                self.state = 'green'
-            elif self.state == 'green':
-                self.state = 'yellow'
-            else:
-                self.state = 'red'
-
-class Road:
-    def __init__(self, x1: float, y1: float, x2: float, y2: float, width: int = 60, lanes: int = 2):
-        self.start = Vec2(x1, y1)
-        self.end = Vec2(x2, y2)
-        self.width = width
-        self.lanes = lanes
-        self.color = (50, 50, 50)
-        self.line_color = (255, 255, 255)
-        self.line_dash_length = 20
-        self.line_gap = 10
-
-class GameWorld:
-    def __init__(self, width: int = 2000, height: int = 2000):
-        self.width = width
-        self.height = height
-        self.roads = []
-        self.buildings = []
-        self.trees = []
-        self.traffic_lights = []
-        self.obstacles = []
-        
-        self.generate_world()
-        
-    def generate_world(self):
-        # Tạo đường chính
-        for i in range(0, self.width, 200):
-            # Đường ngang
-            self.roads.append(Road(0, i, self.width, i, width=80, lanes=3))
-            # Đường dọc
-            self.roads.append(Road(i, 0, i, self.height, width=80, lanes=3))
-            
-        # Tạo đường phụ
-        for i in range(100, self.width, 150):
-            if i % 300 == 0:
-                self.roads.append(Road(0, i, self.width, i, width=60, lanes=2))
-                self.roads.append(Road(i, 0, i, self.height, width=60, lanes=2))
-        
-        # Tạo tòa nhà
-        building_colors = [
-            (200, 150, 150),  # Hồng nhạt
-            (150, 200, 150),  # Xanh lá nhạt
-            (150, 150, 200),  # Xanh dương nhạt
-            (200, 200, 150),  # Vàng nhạt
-            (200, 150, 200),  # Tím nhạt
-        ]
-        
-        for _ in range(50):
-            x = random.randint(50, self.width - 50)
-            y = random.randint(50, self.height - 50)
-            
-            # Kiểm tra không đặt nhà lên đường
-            on_road = False
-            for road in self.roads:
-                if abs(y - road.start.y) < road.width/2 + 30 and abs(x - road.start.x) < 10:
-                    on_road = True
-                    break
-                if abs(x - road.start.x) < road.width/2 + 30 and abs(y - road.start.y) < 10:
-                    on_road = True
-                    break
-            
-            if not on_road:
-                width = random.randint(40, 80)
-                height = random.randint(60, 120)
-                color = random.choice(building_colors)
-                self.buildings.append(Building(x, y, width, height, color))
-        
-        # Tạo cây
-        for _ in range(100):
-            x = random.randint(0, self.width)
-            y = random.randint(0, self.height)
-            
-            # Không đặt cây lên đường
-            on_road = False
-            for road in self.roads:
-                if abs(y - road.start.y) < road.width/2 + 20:
-                    on_road = True
-                    break
-            
-            if not on_road:
-                self.trees.append(Tree(x, y, random.randint(20, 40)))
-        
-        # Tạo đèn giao thông
-        for i in range(0, self.width, 200):
-            for j in range(0, self.height, 200):
-                if random.random() < 0.3:
-                    self.traffic_lights.append(TrafficLight(i, j))
-        
-        # Tạo vật cản
-        obstacle_types = [
-            {'color': (255, 165, 0), 'size': 15},  # Cọc tiêu
-            {'color': (255, 0, 0), 'size': 20},    # Thùng
-            {'color': (100, 100, 100), 'size': 25}, # Đá
-            {'color': (255, 255, 0), 'size': 10},  # Nón
-        ]
-        
-        for _ in range(30):
-            x = random.randint(100, self.width - 100)
-            y = random.randint(100, self.height - 100)
-            
-            # Kiểm tra trên đường
-            on_road = False
-            for road in self.roads:
-                if abs(y - road.start.y) < road.width/2:
-                    on_road = True
-                    break
-            
-            if on_road:
-                obstacle = random.choice(obstacle_types)
-                self.obstacles.append({
-                    'position': Vec2(x, y),
-                    'color': obstacle['color'],
-                    'size': obstacle['size']
-                })
+# ==================== HỆ THỐNG GAME ====================
 
 class Game:
     def __init__(self):
-        self.world = GameWorld()
-        self.player = Car(400, 300, (0, 100, 255), is_player=True)
+        self.width = 2000
+        self.height = 2000
+        self.player = {
+            'x': 400,
+            'y': 300,
+            'vx': 0,
+            'vy': 0,
+            'angle': 0,
+            'health': 100,
+            'damage': 0,
+            'color': '#0066CC',
+            'width': 30,
+            'height': 50,
+            'max_speed': 8,
+            'acceleration': 0.2,
+            'braking': 0.3
+        }
+        
         self.ai_cars = []
-        self.camera_pos = Vec2(self.player.position.x, self.player.position.y)
-        self.camera_zoom = 1.5
+        self.particles = []
+        self.buildings = []
+        self.trees = []
+        self.obstacles = []
+        self.roads = []
+        self.traffic_lights = []
+        
         self.score = 0
         self.total_crashes = 0
-        self.max_damage = 0
         self.game_time = 0
+        self.camera_x = self.player['x']
+        self.camera_y = self.player['y']
+        self.camera_zoom = 1.5
+        self.last_update = time.time()
         
-        # Tạo AI cars
+        # Khởi tạo thế giới
+        self.generate_world()
         self.spawn_ai_cars(15)
         
         # Khởi tạo input
@@ -438,482 +94,376 @@ class Game:
                 'right': False,
                 'space': False
             }
+    
+    def generate_world(self):
+        # Tạo đường
+        for i in range(0, self.width, 200):
+            # Đường ngang
+            self.roads.append({
+                'x1': 0, 'y1': i,
+                'x2': self.width, 'y2': i,
+                'width': 80,
+                'lanes': 3,
+                'color': '#333333'
+            })
+            # Đường dọc
+            self.roads.append({
+                'x1': i, 'y1': 0,
+                'x2': i, 'y2': self.height,
+                'width': 80,
+                'lanes': 3,
+                'color': '#333333'
+            })
         
-    def spawn_ai_cars(self, count: int):
-        ai_colors = [
-            (255, 0, 0),     # Đỏ
-            (0, 255, 0),     # Xanh lá
-            (255, 255, 0),   # Vàng
-            (255, 165, 0),   # Cam
-            (128, 0, 128),   # Tím
-            (0, 255, 255),   # Cyan
-            (255, 192, 203), # Hồng
+        # Tạo nhà cửa
+        building_colors = ['#C89664', '#A0522D', '#8B4513', '#D2691E', '#CD853F']
+        for _ in range(50):
+            x = random.randint(50, self.width - 50)
+            y = random.randint(50, self.height - 50)
+            
+            # Kiểm tra không đặt trên đường
+            on_road = False
+            for road in self.roads:
+                if abs(y - road['y1']) < road['width']/2 + 30:
+                    on_road = True
+                    break
+            
+            if not on_road:
+                self.buildings.append({
+                    'x': x, 'y': y,
+                    'width': random.randint(40, 80),
+                    'height': random.randint(60, 120),
+                    'color': random.choice(building_colors),
+                    'window_color': '#C8E0FF'
+                })
+        
+        # Tạo cây
+        for _ in range(100):
+            x = random.randint(0, self.width)
+            y = random.randint(0, self.height)
+            
+            # Kiểm tra không trên đường
+            on_road = False
+            for road in self.roads:
+                if abs(y - road['y1']) < road['width']/2 + 20:
+                    on_road = True
+                    break
+            
+            if not on_road:
+                self.trees.append({
+                    'x': x, 'y': y,
+                    'size': random.randint(20, 40),
+                    'trunk_color': '#654321',
+                    'leaves_color': '#228B22'
+                })
+        
+        # Tạo vật cản
+        obstacle_types = [
+            {'color': '#FFA500', 'size': 15, 'shape': 'cone'},
+            {'color': '#FF0000', 'size': 20, 'shape': 'barrel'},
+            {'color': '#666666', 'size': 25, 'shape': 'rock'},
+            {'color': '#FFFF00', 'size': 10, 'shape': 'cone'}
         ]
         
-        for _ in range(count):
-            # Tìm vị trí trên đường
-            road = random.choice(self.world.roads)
-            t = random.random()
-            x = road.start.x + (road.end.x - road.start.x) * t
-            y = road.start.y + (road.end.y - road.start.y) * t
+        for _ in range(30):
+            x = random.randint(100, self.width - 100)
+            y = random.randint(100, self.height - 100)
             
-            # Thêm offset ngẫu nhiên
+            # Kiểm tra trên đường
+            on_road = False
+            for road in self.roads:
+                if abs(y - road['y1']) < road['width']/2:
+                    on_road = True
+                    break
+            
+            if on_road:
+                obstacle = random.choice(obstacle_types)
+                self.obstacles.append({
+                    'x': x, 'y': y,
+                    'color': obstacle['color'],
+                    'size': obstacle['size'],
+                    'shape': obstacle['shape']
+                })
+    
+    def spawn_ai_cars(self, count: int):
+        ai_colors = ['#FF0000', '#00FF00', '#FFFF00', '#FFA500', '#800080', '#00FFFF', '#FFC0CB']
+        
+        for _ in range(count):
+            # Chọn đường ngẫu nhiên
+            road = random.choice(self.roads)
+            t = random.random()
+            x = road['x1'] + (road['x2'] - road['x1']) * t
+            y = road['y1'] + (road['y2'] - road['y1']) * t
+            
+            # Thêm offset
             x += random.uniform(-20, 20)
             y += random.uniform(-20, 20)
             
-            color = random.choice(ai_colors)
-            ai_car = Car(x, y, color, is_player=False)
-            self.ai_cars.append(ai_car)
+            self.ai_cars.append({
+                'x': x, 'y': y,
+                'vx': 0, 'vy': 0,
+                'angle': random.uniform(0, 360),
+                'target_x': random.uniform(0, self.width),
+                'target_y': random.uniform(0, self.height),
+                'health': 100,
+                'damage': 0,
+                'color': random.choice(ai_colors),
+                'width': 25,
+                'height': 45,
+                'max_speed': random.uniform(3, 6),
+                'acceleration': 0.1,
+                'ai_timer': random.uniform(0, 5),
+                'ai_change_time': random.uniform(2, 5)
+            })
     
     def update(self, dt: float):
         # Cập nhật player
-        self.player.update(dt, self.world.obstacles, self.ai_cars)
+        self.update_player(dt)
         
         # Cập nhật AI cars
-        for ai_car in self.ai_cars:
-            ai_car.update(dt, self.world.obstacles, self.ai_cars)
-            
-            # Kiểm tra va chạm với player
-            if self.check_collision(self.player, ai_car):
-                force = self.player.velocity.magnitude() + ai_car.velocity.magnitude()
-                self.player.apply_crash(force, ai_car.position)
-                ai_car.apply_crash(force, self.player.position)
-                self.total_crashes += 1
-                self.score += int(force * 10)
-                
-            # Kiểm tra va chạm giữa các AI
-            for other_ai in self.ai_cars:
-                if ai_car != other_ai and self.check_collision(ai_car, other_ai):
-                    force = ai_car.velocity.magnitude() + other_ai.velocity.magnitude()
-                    ai_car.apply_crash(force, other_ai.position)
-                    other_ai.apply_crash(force, ai_car.position)
-                    self.score += int(force * 5)
+        self.update_ai_cars(dt)
         
-        # Cập nhật đèn giao thông
-        for light in self.world.traffic_lights:
-            light.update(dt)
+        # Cập nhật particles
+        self.update_particles(dt)
         
         # Cập nhật camera
-        self.camera_pos.x += (self.player.position.x - self.camera_pos.x) * 0.1
-        self.camera_pos.y += (self.player.position.y - self.camera_pos.y) * 0.1
+        self.camera_x += (self.player['x'] - self.camera_x) * 0.1
+        self.camera_y += (self.player['y'] - self.camera_y) * 0.1
         
         # Cập nhật thời gian
         self.game_time += dt
         
-        # Cập nhật max damage
-        self.max_damage = max(self.max_damage, self.player.damage)
+        # Kiểm tra va chạm
+        self.check_collisions()
         
         # Hồi sinh AI cars bị phá hủy
-        for i, ai_car in enumerate(self.ai_cars):
-            if ai_car.health <= 0:
-                # Tạo hiệu ứng nổ lớn
+        for i, ai in enumerate(self.ai_cars):
+            if ai['health'] <= 0:
+                # Tạo hiệu ứng nổ
                 for _ in range(30):
-                    self.player.crash_particles.append(PixelParticle(
-                        ai_car.position,
-                        ai_car.color,
-                        size=random.randint(3, 8)
-                    ))
+                    self.create_particle(
+                        ai['x'], ai['y'],
+                        ai['color'],
+                        random.uniform(-5, 5),
+                        random.uniform(-5, 5),
+                        random.randint(3, 8)
+                    )
                 
                 # Tạo xe mới
-                road = random.choice(self.world.roads)
+                road = random.choice(self.roads)
                 t = random.random()
-                x = road.start.x + (road.end.x - road.start.x) * t
-                y = road.start.y + (road.end.y - road.start.y) * t
+                x = road['x1'] + (road['x2'] - road['x1']) * t
+                y = road['y1'] + (road['y2'] - road['y1']) * t
                 
-                ai_colors = [(255, 0, 0), (0, 255, 0), (255, 255, 0)]
-                self.ai_cars[i] = Car(x, y, random.choice(ai_colors), is_player=False)
+                self.ai_cars[i] = {
+                    'x': x, 'y': y,
+                    'vx': 0, 'vy': 0,
+                    'angle': random.uniform(0, 360),
+                    'target_x': random.uniform(0, self.width),
+                    'target_y': random.uniform(0, self.height),
+                    'health': 100,
+                    'damage': 0,
+                    'color': random.choice(['#FF0000', '#00FF00', '#FFFF00']),
+                    'width': 25,
+                    'height': 45,
+                    'max_speed': random.uniform(3, 6),
+                    'acceleration': 0.1,
+                    'ai_timer': random.uniform(0, 5),
+                    'ai_change_time': random.uniform(2, 5)
+                }
                 self.score += 100
     
-    def check_collision(self, car1: Car, car2: Car) -> bool:
-        box1 = car1.get_bounding_box()
-        box2 = car2.get_bounding_box()
+    def update_player(self, dt: float):
+        # Lấy input
+        keys = st.session_state.keys_pressed
         
-        return (abs(box1['x'] - box2['x']) * 2 < (box1['width'] + box2['width']) and
-                abs(box1['y'] - box2['y']) * 2 < (box1['height'] + box2['height']))
-    
-    def check_collision_with_obstacle(self, car: Car) -> bool:
-        for obstacle in self.world.obstacles:
-            car_box = car.get_bounding_box()
-            obs_x, obs_y = obstacle['position'].x, obstacle['position'].y
-            obs_size = obstacle['size']
-            
-            distance = car.position.distance(obstacle['position'])
-            if distance < (max(car.width, car.height) / 2 + obs_size):
-                return True
-        return False
-    
-    def draw(self, width: int = 800, height: int = 600):
-        # Tạo ảnh mới
-        img = Image.new('RGB', (width, height), (135, 206, 235))  # Màu trời
-        draw = ImageDraw.Draw(img)
+        # Tăng tốc
+        if keys.get('up', False):
+            rad = math.radians(self.player['angle'])
+            self.player['vx'] += math.cos(rad) * self.player['acceleration']
+            self.player['vy'] += math.sin(rad) * self.player['acceleration']
         
-        # Tính toán viewport dựa trên camera
-        view_left = self.camera_pos.x - width / (2 * self.camera_zoom)
-        view_top = self.camera_pos.y - height / (2 * self.camera_zoom)
-        view_right = self.camera_pos.x + width / (2 * self.camera_zoom)
-        view_bottom = self.camera_pos.y + height / (2 * self.camera_zoom)
+        # Phanh
+        if keys.get('down', False):
+            self.player['vx'] *= 0.9
+            self.player['vy'] *= 0.9
         
-        def world_to_screen(pos: Vec2):
-            return (
-                (pos.x - view_left) * self.camera_zoom,
-                (pos.y - view_top) * self.camera_zoom
+        # Lái trái
+        if keys.get('left', False):
+            self.player['angle'] -= 3
+        
+        # Lái phải
+        if keys.get('right', False):
+            self.player['angle'] += 3
+        
+        # Phanh tay
+        if keys.get('space', False):
+            self.player['vx'] *= 0.7
+            self.player['vy'] *= 0.7
+        
+        # Giới hạn tốc độ
+        speed = math.sqrt(self.player['vx']**2 + self.player['vy']**2)
+        if speed > self.player['max_speed']:
+            scale = self.player['max_speed'] / speed
+            self.player['vx'] *= scale
+            self.player['vy'] *= scale
+        
+        # Cập nhật vị trí
+        self.player['x'] += self.player['vx']
+        self.player['y'] += self.player['vy']
+        
+        # Ma sát
+        self.player['vx'] *= 0.98
+        self.player['vy'] *= 0.98
+        
+        # Tạo vết lốp
+        if speed > 2 and random.random() < 0.3:
+            self.create_particle(
+                self.player['x'] - math.cos(math.radians(self.player['angle'])) * 25,
+                self.player['y'] - math.sin(math.radians(self.player['angle'])) * 25,
+                '#666666',
+                self.player['vx'] * 0.1,
+                self.player['vy'] * 0.1,
+                random.randint(2, 4)
             )
-        
-        # Vẽ đường
-        for road in self.world.roads:
-            start_screen = world_to_screen(road.start)
-            end_screen = world_to_screen(road.end)
+    
+    def update_ai_cars(self, dt: float):
+        for ai in self.ai_cars:
+            # Cập nhật timer
+            ai['ai_timer'] += dt
             
-            # Vẽ mặt đường
-            draw.line([start_screen, end_screen], 
-                     fill=road.color, 
-                     width=int(road.width * self.camera_zoom))
+            # Đổi target mới
+            if ai['ai_timer'] >= ai['ai_change_time']:
+                ai['target_x'] = random.uniform(0, self.width)
+                ai['target_y'] = random.uniform(0, self.height)
+                ai['ai_timer'] = 0
             
-            # Vẽ vạch kẻ đường
-            if road.width > 40:
-                line_count = road.lanes - 1
-                for i in range(1, line_count + 1):
-                    offset = (i / (line_count + 1) - 0.5) * road.width * 0.8
+            # Tính toán hướng
+            dx = ai['target_x'] - ai['x']
+            dy = ai['target_y'] - ai['y']
+            dist = math.sqrt(dx**2 + dy**2)
+            
+            if dist > 10:
+                # Di chuyển về target
+                ai['vx'] += (dx / dist) * ai['acceleration']
+                ai['vy'] += (dy / dist) * ai['acceleration']
+                
+                # Cập nhật góc
+                target_angle = math.degrees(math.atan2(dy, dx))
+                angle_diff = (target_angle - ai['angle']) % 360
+                if angle_diff > 180:
+                    angle_diff -= 360
+                ai['angle'] += angle_diff * 0.08
+            
+            # Giới hạn tốc độ
+            speed = math.sqrt(ai['vx']**2 + ai['vy']**2)
+            if speed > ai['max_speed']:
+                scale = ai['max_speed'] / speed
+                ai['vx'] *= scale
+                ai['vy'] *= scale
+            
+            # Cập nhật vị trí
+            ai['x'] += ai['vx']
+            ai['y'] += ai['vy']
+            
+            # Ma sát
+            ai['vx'] *= 0.98
+            ai['vy'] *= 0.98
+    
+    def create_particle(self, x: float, y: float, color: str, vx: float, vy: float, size: int):
+        self.particles.append({
+            'x': x, 'y': y,
+            'vx': vx, 'vy': vy,
+            'color': color,
+            'size': size,
+            'life': 1.0,
+            'gravity': 0.5,
+            'friction': 0.98
+        })
+    
+    def update_particles(self, dt: float):
+        for particle in self.particles[:]:
+            # Cập nhật vật lý
+            particle['vy'] += particle['gravity']
+            particle['vx'] *= particle['friction']
+            particle['vy'] *= particle['friction']
+            particle['x'] += particle['vx']
+            particle['y'] += particle['vy']
+            particle['life'] -= 0.02
+            particle['size'] = max(1, particle['size'] * 0.95)
+            
+            # Xóa particle đã chết
+            if particle['life'] <= 0:
+                self.particles.remove(particle)
+    
+    def check_collisions(self):
+        # Kiểm tra va chạm giữa player và AI
+        for ai in self.ai_cars:
+            dx = self.player['x'] - ai['x']
+            dy = self.player['y'] - ai['y']
+            distance = math.sqrt(dx**2 + dy**2)
+            
+            collision_distance = (self.player['width'] + ai['width']) / 2
+            
+            if distance < collision_distance:
+                # Tính lực va chạm
+                player_speed = math.sqrt(self.player['vx']**2 + self.player['vy']**2)
+                ai_speed = math.sqrt(ai['vx']**2 + ai['vy']**2)
+                force = player_speed + ai_speed
+                
+                # Áp dụng damage
+                self.player['health'] -= force * 2
+                self.player['damage'] += force * 2
+                ai['health'] -= force * 2
+                ai['damage'] += force * 2
+                
+                # Tạo particles
+                crash_x = (self.player['x'] + ai['x']) / 2
+                crash_y = (self.player['y'] + ai['y']) / 2
+                
+                num_particles = int(force * 5)
+                for _ in range(num_particles):
+                    # Particle từ player
+                    self.create_particle(
+                        crash_x, crash_y,
+                        self.player['color'],
+                        random.uniform(-force, force),
+                        random.uniform(-force, force),
+                        random.randint(2, 6)
+                    )
                     
-                    # Tính vị trí song song
-                    dx = road.end.x - road.start.x
-                    dy = road.end.y - road.start.y
-                    length = math.sqrt(dx*dx + dy*dy)
+                    # Particle từ AI
+                    self.create_particle(
+                        crash_x, crash_y,
+                        ai['color'],
+                        random.uniform(-force, force),
+                        random.uniform(-force, force),
+                        random.randint(2, 6)
+                    )
+                
+                # Đẩy xe ra
+                if distance > 0:
+                    push_x = dx / distance * force * 0.5
+                    push_y = dy / distance * force * 0.5
                     
-                    if length > 0:
-                        perp = Vec2(-dy, dx).normalize()
-                        start_offset = road.start + perp * offset
-                        end_offset = road.end + perp * offset
-                        
-                        start_screen = world_to_screen(start_offset)
-                        end_screen = world_to_screen(end_offset)
-                        
-                        # Vẽ đường đứt đoạn
-                        dash_length = road.line_dash_length * self.camera_zoom
-                        gap_length = road.line_gap * self.camera_zoom
-                        total_length = math.sqrt(
-                            (end_screen[0] - start_screen[0])**2 + 
-                            (end_screen[1] - start_screen[1])**2
-                        )
-                        
-                        if total_length > 0:
-                            dx_screen = (end_screen[0] - start_screen[0]) / total_length
-                            dy_screen = (end_screen[1] - start_screen[1]) / total_length
-                            
-                            current = 0
-                            while current < total_length:
-                                next_point = current + dash_length
-                                if next_point > total_length:
-                                    next_point = total_length
-                                
-                                x1 = start_screen[0] + dx_screen * current
-                                y1 = start_screen[1] + dy_screen * current
-                                x2 = start_screen[0] + dx_screen * next_point
-                                y2 = start_screen[1] + dy_screen * next_point
-                                
-                                draw.line([(x1, y1), (x2, y2)], 
-                                         fill=road.line_color,
-                                         width=max(1, int(2 * self.camera_zoom)))
-                                
-                                current += dash_length + gap_length
-        
-        # Vẽ nhà cửa
-        for building in self.world.buildings:
-            screen_pos = world_to_screen(building.position)
-            bbox = building.get_bounding_box()
-            
-            left = (bbox['x'] - view_left) * self.camera_zoom
-            top = (bbox['y'] - view_top) * self.camera_zoom
-            right = left + building.width * self.camera_zoom
-            bottom = top + building.height * self.camera_zoom
-            
-            # Chỉ vẽ nếu trong màn hình
-            if (right > 0 and left < width and bottom > 0 and top < height):
-                # Vẽ tòa nhà
-                draw.rectangle([left, top, right, bottom], 
-                              fill=building.color, 
-                              outline=(0, 0, 0))
+                    self.player['vx'] += push_x
+                    self.player['vy'] += push_y
+                    ai['vx'] -= push_x
+                    ai['vy'] -= push_y
                 
-                # Vẽ cửa sổ
-                window_size = 8 * self.camera_zoom
-                window_gap = 12 * self.camera_zoom
-                
-                for wx in range(int(left + window_gap), int(right), int(window_gap)):
-                    for wy in range(int(top + window_gap), int(bottom), int(window_gap)):
-                        if wx < right - window_gap and wy < bottom - window_gap:
-                            draw.rectangle([
-                                wx, wy, 
-                                wx + window_size, 
-                                wy + window_size
-                            ], fill=building.window_color)
-        
-        # Vẽ cây
-        for tree in self.world.trees:
-            screen_pos = world_to_screen(tree.position)
-            size = tree.size * self.camera_zoom
-            
-            if (screen_pos[0] > -size and screen_pos[0] < width + size and
-                screen_pos[1] > -size and screen_pos[1] < height + size):
-                
-                # Vẽ thân cây
-                trunk_width = size * 0.3
-                trunk_height = size * 0.5
-                draw.rectangle([
-                    screen_pos[0] - trunk_width/2,
-                    screen_pos[1] - trunk_height/2,
-                    screen_pos[0] + trunk_width/2,
-                    screen_pos[1] + trunk_height/2
-                ], fill=tree.trunk_color)
-                
-                # Vẽ tán lá
-                draw.ellipse([
-                    screen_pos[0] - size/2,
-                    screen_pos[1] - size/2 - trunk_height/2,
-                    screen_pos[0] + size/2,
-                    screen_pos[1] + size/2 - trunk_height/2
-                ], fill=tree.leaves_color)
-        
-        # Vẽ vật cản
-        for obstacle in self.world.obstacles:
-            screen_pos = world_to_screen(obstacle['position'])
-            size = obstacle['size'] * self.camera_zoom
-            
-            if (screen_pos[0] > -size and screen_pos[0] < width + size and
-                screen_pos[1] > -size and screen_pos[1] < height + size):
-                
-                shape = random.choice(['circle', 'square', 'triangle'])
-                
-                if shape == 'circle':
-                    draw.ellipse([
-                        screen_pos[0] - size/2,
-                        screen_pos[1] - size/2,
-                        screen_pos[0] + size/2,
-                        screen_pos[1] + size/2
-                    ], fill=obstacle['color'], outline=(0, 0, 0))
-                elif shape == 'square':
-                    draw.rectangle([
-                        screen_pos[0] - size/2,
-                        screen_pos[1] - size/2,
-                        screen_pos[0] + size/2,
-                        screen_pos[1] + size/2
-                    ], fill=obstacle['color'], outline=(0, 0, 0))
-                else:  # triangle
-                    points = [
-                        (screen_pos[0], screen_pos[1] - size/2),
-                        (screen_pos[0] + size/2, screen_pos[1] + size/2),
-                        (screen_pos[0] - size/2, screen_pos[1] + size/2)
-                    ]
-                    draw.polygon(points, fill=obstacle['color'], outline=(0, 0, 0))
-        
-        # Vẽ đèn giao thông
-        for light in self.world.traffic_lights:
-            screen_pos = world_to_screen(light.position)
-            size = 15 * self.camera_zoom
-            
-            if (screen_pos[0] > -size and screen_pos[0] < width + size and
-                screen_pos[1] > -size and screen_pos[1] < height + size):
-                
-                # Vẽ cột đèn
-                draw.rectangle([
-                    screen_pos[0] - size/4,
-                    screen_pos[1] - size,
-                    screen_pos[0] + size/4,
-                    screen_pos[1] + size
-                ], fill=(50, 50, 50))
-                
-                # Vẽ đèn
-                light_color = {
-                    'red': (255, 0, 0),
-                    'yellow': (255, 255, 0),
-                    'green': (0, 255, 0)
-                }[light.state]
-                
-                draw.ellipse([
-                    screen_pos[0] - size/3,
-                    screen_pos[1] - size/2,
-                    screen_pos[0] + size/3,
-                    screen_pos[1] + size/2
-                ], fill=light_color)
-        
-        # Vẽ trail particles của player
-        for particle in self.player.trail_particles:
-            screen_pos = world_to_screen(particle.position)
-            if (screen_pos[0] > 0 and screen_pos[0] < width and
-                screen_pos[1] > 0 and screen_pos[1] < height):
-                draw.rectangle([
-                    screen_pos[0] - particle.size/2,
-                    screen_pos[1] - particle.size/2,
-                    screen_pos[0] + particle.size/2,
-                    screen_pos[1] + particle.size/2
-                ], fill=particle.color)
-        
-        # Vẽ AI cars
-        for ai_car in self.ai_cars:
-            screen_pos = world_to_screen(ai_car.position)
-            car_width = ai_car.width * self.camera_zoom
-            car_height = ai_car.height * self.camera_zoom
-            
-            if (screen_pos[0] > -car_width and screen_pos[0] < width + car_width and
-                screen_pos[1] > -car_height and screen_pos[1] < height + car_height):
-                
-                # Vẽ thân xe
-                draw.rectangle([
-                    screen_pos[0] - car_width/2,
-                    screen_pos[1] - car_height/2,
-                    screen_pos[0] + car_width/2,
-                    screen_pos[1] + car_height/2
-                ], fill=ai_car.color, outline=(0, 0, 0))
-                
-                # Vẽ kính chắn gió
-                windshield_color = (200, 230, 255)
-                draw.rectangle([
-                    screen_pos[0] - car_width/3,
-                    screen_pos[1] - car_height/2,
-                    screen_pos[0] + car_width/3,
-                    screen_pos[1] - car_height/4
-                ], fill=windshield_color)
-                
-                # Hiển thị damage nếu có
-                if ai_car.damage > 30:
-                    damage_alpha = min(200, ai_car.damage * 2)
-                    damage_color = (255, 0, 0, damage_alpha)
-                    
-                    # Vẽ vết nứt
-                    for _ in range(int(ai_car.damage / 20)):
-                        crack_x = screen_pos[0] + random.uniform(-car_width/3, car_width/3)
-                        crack_y = screen_pos[1] + random.uniform(-car_height/3, car_height/3)
-                        length = random.uniform(3, 8) * self.camera_zoom
-                        angle = random.uniform(0, 360)
-                        
-                        end_x = crack_x + math.cos(math.radians(angle)) * length
-                        end_y = crack_y + math.sin(math.radians(angle)) * length
-                        
-                        draw.line([(crack_x, crack_y), (end_x, end_y)], 
-                                 fill=(0, 0, 0), 
-                                 width=int(self.camera_zoom))
-        
-        # Vẽ player car
-        screen_pos = world_to_screen(self.player.position)
-        car_width = self.player.width * self.camera_zoom
-        car_height = self.player.height * self.camera_zoom
-        
-        # Vẽ thân xe
-        draw.rectangle([
-            screen_pos[0] - car_width/2,
-            screen_pos[1] - car_height/2,
-            screen_pos[0] + car_width/2,
-            screen_pos[1] + car_height/2
-        ], fill=self.player.color, outline=(255, 255, 0), width=2)
-        
-        # Vẽ kính chắn gió
-        windshield_color = (220, 240, 255)
-        draw.rectangle([
-            screen_pos[0] - car_width/3,
-            screen_pos[1] - car_height/2,
-            screen_pos[0] + car_width/3,
-            screen_pos[1] - car_height/4
-        ], fill=windshield_color)
-        
-        # Vẽ đèn pha
-        headlight_color = (255, 255, 200)
-        draw.ellipse([
-            screen_pos[0] - car_width/2 - 5,
-            screen_pos[1] - car_height/4,
-            screen_pos[0] - car_width/2 + 5,
-            screen_pos[1] + car_height/4
-        ], fill=headlight_color)
-        draw.ellipse([
-            screen_pos[0] + car_width/2 - 5,
-            screen_pos[1] - car_height/4,
-            screen_pos[0] + car_width/2 + 5,
-            screen_pos[1] + car_height/4
-        ], fill=headlight_color)
-        
-        # Vẽ đèn phanh nếu đang phanh
-        if st.session_state.keys_pressed.get('down', False) or st.session_state.keys_pressed.get('space', False):
-            brake_color = (255, 50, 50)
-            draw.rectangle([
-                screen_pos[0] - car_width/3,
-                screen_pos[1] + car_height/2 - 8,
-                screen_pos[0] + car_width/3,
-                screen_pos[1] + car_height/2
-            ], fill=brake_color)
-        
-        # Vẽ crash particles
-        all_particles = self.player.crash_particles.copy()
-        for ai_car in self.ai_cars:
-            all_particles.extend(ai_car.crash_particles)
-        
-        for particle in all_particles:
-            screen_pos_p = world_to_screen(particle.position)
-            if (screen_pos_p[0] > 0 and screen_pos_p[0] < width and
-                screen_pos_p[1] > 0 and screen_pos_p[1] < height):
-                
-                alpha = int(255 * particle.life)
-                color_with_alpha = particle.color + (alpha,)
-                
-                # Vẽ pixel particle
-                draw.rectangle([
-                    screen_pos_p[0] - particle.size/2,
-                    screen_pos_p[1] - particle.size/2,
-                    screen_pos_p[0] + particle.size/2,
-                    screen_pos_p[1] + particle.size/2
-                ], fill=particle.color)
-        
-        # Vẽ UI
-        try:
-            font = ImageFont.truetype("arial.ttf", 16)
-        except:
-            font = ImageFont.load_default()
-        
-        # Thông tin player
-        draw.rectangle([10, 10, 250, 130], fill=(0, 0, 0, 150), outline=(255, 255, 255))
-        
-        # Health bar
-        health_width = 200 * (self.player.health / 100)
-        draw.rectangle([20, 20, 20 + health_width, 35], fill=(0, 255, 0))
-        draw.rectangle([20, 20, 220, 35], outline=(255, 255, 255))
-        draw.text((20, 40), f"HP: {self.player.health:.0f}/100", fill=(255, 255, 255), font=font)
-        
-        # Damage
-        draw.text((20, 60), f"Hư hại: {self.player.damage:.0f}%", fill=(255, 255, 255), font=font)
-        
-        # Score
-        draw.text((20, 80), f"Điểm: {self.score:,}", fill=(255, 255, 255), font=font)
-        
-        # Game time
-        minutes = int(self.game_time // 60)
-        seconds = int(self.game_time % 60)
-        draw.text((20, 100), f"Thời gian: {minutes:02d}:{seconds:02d}", fill=(255, 255, 255), font=font)
-        
-        # Tốc độ
-        speed = self.player.velocity.magnitude() * 20
-        draw.text((20, 120), f"Tốc độ: {speed:.0f} km/h", fill=(255, 255, 255), font=font)
-        
-        # Thông tin va chạm
-        draw.rectangle([width - 260, 10, width - 10, 110], fill=(0, 0, 0, 150), outline=(255, 255, 255))
-        draw.text((width - 250, 20), f"Số lần va chạm: {self.total_crashes}", fill=(255, 255, 255), font=font)
-        draw.text((width - 250, 40), f"Xe AI: {len(self.ai_cars)}", fill=(255, 255, 255), font=font)
-        draw.text((width - 250, 60), f"Lực mạnh nhất: {self.max_damage:.0f}", fill=(255, 255, 255), font=font)
-        draw.text((width - 250, 80), f"Camera zoom: {self.camera_zoom:.1f}x", fill=(255, 255, 255), font=font)
-        
-        # Hướng dẫn
-        draw.text((width - 250, height - 80), "ĐIỀU KHIỂN:", fill=(255, 255, 255), font=font)
-        draw.text((width - 250, height - 60), "↑↓: Tốc độ | ←→: Lái", fill=(255, 255, 255), font=font)
-        draw.text((width - 250, height - 40), "Space: Phanh tay | R: Reset", fill=(255, 255, 255), font=font)
-        
-        return img
+                # Cập nhật điểm
+                self.total_crashes += 1
+                self.score += int(force * 10)
 
 # ==================== GIAO DIỆN STREAMLIT ====================
 
 def main():
     st.title("💥 Pixel Crash Simulator")
-    st.markdown("### Game Va Chạm Xe Pixel - Phá Hủy Mọi Thứ!")
+    st.markdown("### Game Va Chạm Xe Pixel - Không Cần Pillow!")
     
     # Khởi tạo game
     if 'game' not in st.session_state:
         st.session_state.game = Game()
-        st.session_state.last_update = time.time()
         st.session_state.game_running = True
     
     game = st.session_state.game
@@ -922,7 +472,6 @@ def main():
     with st.sidebar:
         st.header("🎮 Điều Khiển Game")
         
-        # Nút bắt đầu/dừng
         col1, col2 = st.columns(2)
         with col1:
             if st.button("▶️ Bắt đầu" if not st.session_state.game_running else "⏸️ Dừng", 
@@ -933,16 +482,13 @@ def main():
         with col2:
             if st.button("🔄 Reset Game", use_container_width=True):
                 st.session_state.game = Game()
-                st.session_state.last_update = time.time()
                 st.rerun()
         
         st.markdown("---")
         
-        # Camera controls
         st.subheader("📷 Camera")
         game.camera_zoom = st.slider("Zoom", 0.5, 3.0, game.camera_zoom, 0.1)
         
-        # Game settings
         st.subheader("⚙️ Cài Đặt")
         ai_count = st.slider("Số lượng xe AI", 5, 30, len(game.ai_cars))
         if ai_count != len(game.ai_cars):
@@ -954,121 +500,526 @@ def main():
         
         st.markdown("---")
         
-        # Thống kê
         st.subheader("📊 Thống Kê")
         st.metric("🏆 Điểm số", f"{game.score:,}")
         st.metric("💥 Số lần va chạm", game.total_crashes)
-        st.metric("⚠️ Hư hại xe", f"{game.player.damage:.0f}%")
-        st.metric("❤️ Sức khỏe", f"{game.player.health:.0f}%")
+        st.metric("⚠️ Hư hại xe", f"{game.player['damage']:.0f}%")
+        st.metric("❤️ Sức khỏe", f"{game.player['health']:.0f}%")
         
         st.markdown("---")
         
-        # Keyboard controls
-        st.subheader("⌨️ Điều Khiển Bàn Phím")
+        st.subheader("⌨️ Điều Khiển")
         st.markdown("""
-        - **↑ Mũi tên lên**: Tăng tốc
-        - **↓ Mũi tên xuống**: Phanh
-        - **← Mũi tên trái**: Lái trái
-        - **→ Mũi tên phải**: Lái phải
+        - **W/↑**: Tăng tốc
+        - **S/↓**: Phanh
+        - **A/←**: Lái trái
+        - **D/→**: Lái phải
         - **Space**: Phanh tay
         - **R**: Reset xe
-        - **Z**: Zoom in
-        - **X**: Zoom out
         """)
     
     # Main game area
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        # Game canvas
-        game_container = st.empty()
+        # Game canvas sẽ được tạo bằng HTML/JS
+        st.markdown(f"""
+        <div id="game-container" style="position: relative; width: 800px; height: 600px; margin: 0 auto;">
+            <canvas id="game-canvas" width="800" height="600" 
+                    style="border: 2px solid #333; background: #87CEEB;"></canvas>
+            <div id="game-ui" style="position: absolute; top: 10px; left: 10px; color: white; font-family: Arial;">
+                <div style="background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px;">
+                    <div>🏆 Điểm: {game.score:,}</div>
+                    <div>❤️ HP: {game.player['health']:.0f}%</div>
+                    <div>⚠️ Hư hại: {game.player['damage']:.0f}%</div>
+                    <div>💥 Va chạm: {game.total_crashes}</div>
+                    <div>🚗 Xe AI: {len(game.ai_cars)}</div>
+                </div>
+            </div>
+        </div>
+        
+        <script>
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Game state từ Python
+        const gameState = {{
+            player: {json.dumps(game.player)},
+            ai_cars: {json.dumps(game.ai_cars)},
+            particles: {json.dumps(game.particles)},
+            buildings: {json.dumps(game.buildings)},
+            trees: {json.dumps(game.trees)},
+            obstacles: {json.dumps(game.obstacles)},
+            roads: {json.dumps(game.roads)},
+            camera: {{ x: {game.camera_x}, y: {game.camera_y}, zoom: {game.camera_zoom} }},
+            width: {game.width},
+            height: {game.height}
+        }};
+        
+        // Hàm chuyển đổi từ world coordinates sang screen coordinates
+        function worldToScreen(wx, wy) {{
+            const zoom = gameState.camera.zoom;
+            const screenX = (wx - gameState.camera.x + canvas.width / (2 * zoom)) * zoom;
+            const screenY = (wy - gameState.camera.y + canvas.height / (2 * zoom)) * zoom;
+            return {{ x: screenX, y: screenY }};
+        }}
+        
+        // Vẽ đường
+        function drawRoads() {{
+            gameState.roads.forEach(road => {{
+                const start = worldToScreen(road.x1, road.y1);
+                const end = worldToScreen(road.x2, road.y2);
+                
+                ctx.beginPath();
+                ctx.moveTo(start.x, start.y);
+                ctx.lineTo(end.x, end.y);
+                ctx.lineWidth = road.width * gameState.camera.zoom;
+                ctx.strokeStyle = road.color;
+                ctx.stroke();
+                
+                // Vẽ vạch kẻ đường
+                if (road.width > 40) {{
+                    ctx.setLineDash([20 * gameState.camera.zoom, 10 * gameState.camera.zoom]);
+                    ctx.lineWidth = 2 * gameState.camera.zoom;
+                    ctx.strokeStyle = '#FFFFFF';
+                    
+                    for (let i = 1; i < road.lanes; i++) {{
+                        const offset = (i / road.lanes - 0.5) * road.width * 0.8;
+                        const dx = end.x - start.x;
+                        const dy = end.y - start.y;
+                        const length = Math.sqrt(dx * dx + dy * dy);
+                        
+                        if (length > 0) {{
+                            const perpX = -dy / length * offset;
+                            const perpY = dx / length * offset;
+                            
+                            ctx.beginPath();
+                            ctx.moveTo(start.x + perpX, start.y + perpY);
+                            ctx.lineTo(end.x + perpX, end.y + perpY);
+                            ctx.stroke();
+                        }}
+                    }}
+                    ctx.setLineDash([]);
+                }}
+            }});
+        }}
+        
+        // Vẽ nhà cửa
+        function drawBuildings() {{
+            gameState.buildings.forEach(building => {{
+                const pos = worldToScreen(building.x, building.y);
+                const width = building.width * gameState.camera.zoom;
+                const height = building.height * gameState.camera.zoom;
+                
+                ctx.fillStyle = building.color;
+                ctx.fillRect(pos.x - width/2, pos.y - height/2, width, height);
+                
+                // Vẽ cửa sổ
+                ctx.fillStyle = building.window_color;
+                const windowSize = 8 * gameState.camera.zoom;
+                const windowGap = 12 * gameState.camera.zoom;
+                
+                for (let wx = pos.x - width/2 + windowGap; wx < pos.x + width/2; wx += windowGap) {{
+                    for (let wy = pos.y - height/2 + windowGap; wy < pos.y + height/2; wy += windowGap) {{
+                        if (wx < pos.x + width/2 - windowGap && wy < pos.y + height/2 - windowGap) {{
+                            ctx.fillRect(wx, wy, windowSize, windowSize);
+                        }}
+                    }}
+                }}
+                
+                // Viền
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(pos.x - width/2, pos.y - height/2, width, height);
+            }});
+        }}
+        
+        // Vẽ cây
+        function drawTrees() {{
+            gameState.trees.forEach(tree => {{
+                const pos = worldToScreen(tree.x, tree.y);
+                const size = tree.size * gameState.camera.zoom;
+                
+                // Thân cây
+                ctx.fillStyle = tree.trunk_color;
+                const trunkWidth = size * 0.3;
+                const trunkHeight = size * 0.5;
+                ctx.fillRect(pos.x - trunkWidth/2, pos.y - trunkHeight/2, trunkWidth, trunkHeight);
+                
+                // Tán lá
+                ctx.fillStyle = tree.leaves_color;
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y - trunkHeight/2, size/2, 0, Math.PI * 2);
+                ctx.fill();
+            }});
+        }}
+        
+        // Vẽ vật cản
+        function drawObstacles() {{
+            gameState.obstacles.forEach(obstacle => {{
+                const pos = worldToScreen(obstacle.x, obstacle.y);
+                const size = obstacle.size * gameState.camera.zoom;
+                
+                ctx.fillStyle = obstacle.color;
+                
+                if (obstacle.shape === 'cone') {{
+                    ctx.beginPath();
+                    ctx.moveTo(pos.x, pos.y - size/2);
+                    ctx.lineTo(pos.x + size/2, pos.y + size/2);
+                    ctx.lineTo(pos.x - size/2, pos.y + size/2);
+                    ctx.closePath();
+                    ctx.fill();
+                }} else if (obstacle.shape === 'barrel') {{
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, size/2, 0, Math.PI * 2);
+                    ctx.fill();
+                }} else {{ // rock
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, size/2, 0, Math.PI * 2);
+                    ctx.fill();
+                }}
+                
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }});
+        }}
+        
+        // Vẽ xe AI
+        function drawAICars() {{
+            gameState.ai_cars.forEach(car => {{
+                const pos = worldToScreen(car.x, car.y);
+                const width = car.width * gameState.camera.zoom;
+                const height = car.height * gameState.camera.zoom;
+                
+                // Lưu context
+                ctx.save();
+                
+                // Xoay canvas theo góc xe
+                ctx.translate(pos.x, pos.y);
+                ctx.rotate(car.angle * Math.PI / 180);
+                
+                // Vẽ thân xe
+                ctx.fillStyle = car.color;
+                ctx.fillRect(-width/2, -height/2, width, height);
+                
+                // Vẽ kính chắn gió
+                ctx.fillStyle = '#C8F0FF';
+                ctx.fillRect(-width/3, -height/2, width * 2/3, height/4);
+                
+                // Viền
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(-width/2, -height/2, width, height);
+                
+                // Vết nứt nếu bị hư hại
+                if (car.damage > 30) {{
+                    ctx.strokeStyle = '#000000';
+                    ctx.lineWidth = 2;
+                    for (let i = 0; i < Math.min(5, car.damage / 20); i++) {{
+                        const x1 = Math.random() * width - width/2;
+                        const y1 = Math.random() * height - height/2;
+                        const length = 5 + Math.random() * 10;
+                        const angle = Math.random() * Math.PI * 2;
+                        const x2 = x1 + Math.cos(angle) * length;
+                        const y2 = y1 + Math.sin(angle) * length;
+                        
+                        ctx.beginPath();
+                        ctx.moveTo(x1, y1);
+                        ctx.lineTo(x2, y2);
+                        ctx.stroke();
+                    }}
+                }}
+                
+                // Khôi phục context
+                ctx.restore();
+            }});
+        }}
+        
+        // Vẽ player car
+        function drawPlayerCar() {{
+            const car = gameState.player;
+            const pos = worldToScreen(car.x, car.y);
+            const width = car.width * gameState.camera.zoom;
+            const height = car.height * gameState.camera.zoom;
+            
+            // Lưu context
+            ctx.save();
+            
+            // Xoay canvas theo góc xe
+            ctx.translate(pos.x, pos.y);
+            ctx.rotate(car.angle * Math.PI / 180);
+            
+            // Vẽ thân xe
+            ctx.fillStyle = car.color;
+            ctx.fillRect(-width/2, -height/2, width, height);
+            
+            // Viền vàng cho player
+            ctx.strokeStyle = '#FFFF00';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(-width/2, -height/2, width, height);
+            
+            // Vẽ kính chắn gió
+            ctx.fillStyle = '#E0F7FF';
+            ctx.fillRect(-width/3, -height/2, width * 2/3, height/4);
+            
+            // Vẽ đèn pha
+            ctx.fillStyle = '#FFFFC8';
+            ctx.fillRect(-width/2 - 5, -height/4, 10, height/2);
+            ctx.fillRect(width/2 - 5, -height/4, 10, height/2);
+            
+            // Đèn phanh nếu đang phanh
+            const keysPressed = {json.dumps(st.session_state.keys_pressed)};
+            if (keysPressed.down || keysPressed.space) {{
+                ctx.fillStyle = '#FF3333';
+                ctx.fillRect(-width/3, height/2 - 8, width * 2/3, 8);
+            }}
+            
+            // Vết nứt nếu bị hư hại
+            if (car.damage > 30) {{
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 2;
+                for (let i = 0; i < Math.min(5, car.damage / 20); i++) {{
+                    const x1 = Math.random() * width - width/2;
+                    const y1 = Math.random() * height - height/2;
+                    const length = 5 + Math.random() * 10;
+                    const angle = Math.random() * Math.PI * 2;
+                    const x2 = x1 + Math.cos(angle) * length;
+                    const y2 = y1 + Math.sin(angle) * length;
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    ctx.lineTo(x2, y2);
+                    ctx.stroke();
+                }}
+            }}
+            
+            // Khôi phục context
+            ctx.restore();
+        }}
+        
+        // Vẽ particles
+        function drawParticles() {{
+            gameState.particles.forEach(particle => {{
+                const pos = worldToScreen(particle.x, particle.y);
+                const size = particle.size * gameState.camera.zoom * particle.life;
+                
+                if (size > 0) {{
+                    ctx.fillStyle = particle.color;
+                    ctx.globalAlpha = particle.life;
+                    ctx.fillRect(pos.x - size/2, pos.y - size/2, size, size);
+                    ctx.globalAlpha = 1.0;
+                }}
+            }});
+        }}
+        
+        // Vẽ lưới (để tham khảo)
+        function drawGrid() {{
+            const gridSize = 100;
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.lineWidth = 1;
+            
+            // Tính toán phạm vi hiển thị
+            const zoom = gameState.camera.zoom;
+            const startX = Math.floor((gameState.camera.x - canvas.width / (2 * zoom)) / gridSize) * gridSize;
+            const endX = Math.ceil((gameState.camera.x + canvas.width / (2 * zoom)) / gridSize) * gridSize;
+            const startY = Math.floor((gameState.camera.y - canvas.height / (2 * zoom)) / gridSize) * gridSize;
+            const endY = Math.ceil((gameState.camera.y + canvas.height / (2 * zoom)) / gridSize) * gridSize;
+            
+            // Vẽ đường kẻ dọc
+            for (let x = startX; x <= endX; x += gridSize) {{
+                const screenPos = worldToScreen(x, 0);
+                ctx.beginPath();
+                ctx.moveTo(screenPos.x, 0);
+                ctx.lineTo(screenPos.x, canvas.height);
+                ctx.stroke();
+            }}
+            
+            // Vẽ đường kẻ ngang
+            for (let y = startY; y <= endY; y += gridSize) {{
+                const screenPos = worldToScreen(0, y);
+                ctx.beginPath();
+                ctx.moveTo(0, screenPos.y);
+                ctx.lineTo(canvas.width, screenPos.y);
+                ctx.stroke();
+            }}
+        }}
+        
+        // Hàm vẽ chính
+        function draw() {{
+            // Xóa canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Vẽ nền trời
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            gradient.addColorStop(0, '#87CEEB');
+            gradient.addColorStop(1, '#4682B4');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Vẽ các thành phần
+            drawRoads();
+            drawGrid();
+            drawBuildings();
+            drawTrees();
+            drawObstacles();
+            drawAICars();
+            drawPlayerCar();
+            drawParticles();
+        }}
+        
+        // Vẽ frame đầu tiên
+        draw();
+        
+        // Cập nhật game nếu đang chạy
+        let lastTime = 0;
+        function gameLoop(currentTime) {{
+            const dt = Math.min(0.1, (currentTime - lastTime) / 1000);
+            lastTime = currentTime;
+            
+            // Gửi request cập nhật nếu game đang chạy
+            if ({'true' if st.session_state.game_running else 'false'}) {{
+                fetch('/_stcore/api/game/update', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                    }},
+                    body: JSON.stringify({{ dt: dt * {damage_multiplier} }})
+                }})
+                .then(response => response.json())
+                .then(data => {{
+                    // Cập nhật game state
+                    Object.assign(gameState, data);
+                    
+                    // Cập nhật UI
+                    document.getElementById('game-ui').innerHTML = `
+                        <div style="background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px;">
+                            <div>🏆 Điểm: ${{data.score.toLocaleString()}}</div>
+                            <div>❤️ HP: ${{data.player.health.toFixed(0)}}%</div>
+                            <div>⚠️ Hư hại: ${{data.player.damage.toFixed(0)}}%</div>
+                            <div>💥 Va chạm: ${{data.total_crashes}}</div>
+                            <div>🚗 Xe AI: ${{data.ai_cars.length}}</div>
+                        </div>
+                    `;
+                    
+                    // Vẽ lại
+                    draw();
+                }});
+            }}
+            
+            requestAnimationFrame(gameLoop);
+        }}
+        
+        // Bắt đầu game loop
+        requestAnimationFrame(gameLoop);
+        
+        // Xử lý input bàn phím
+        document.addEventListener('keydown', (e) => {{
+            const keyMap = {{
+                'ArrowUp': 'up', 'w': 'up', 'W': 'up',
+                'ArrowDown': 'down', 's': 'down', 'S': 'down',
+                'ArrowLeft': 'left', 'a': 'left', 'A': 'left',
+                'ArrowRight': 'right', 'd': 'right', 'D': 'right',
+                ' ': 'space'
+            }};
+            
+            if (keyMap[e.key]) {{
+                fetch('/_stcore/api/game/keydown', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                    }},
+                    body: JSON.stringify({{ key: keyMap[e.key] }})
+                }});
+            }}
+        }});
+        
+        document.addEventListener('keyup', (e) => {{
+            const keyMap = {{
+                'ArrowUp': 'up', 'w': 'up', 'W': 'up',
+                'ArrowDown': 'down', 's': 'down', 'S': 'down',
+                'ArrowLeft': 'left', 'a': 'left', 'A': 'left',
+                'ArrowRight': 'right', 'd': 'right', 'D': 'right',
+                ' ': 'space'
+            }};
+            
+            if (keyMap[e.key]) {{
+                fetch('/_stcore/api/game/keyup', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                    }},
+                    body: JSON.stringify({{ key: keyMap[e.key] }})
+                }});
+            }}
+        }});
+        </script>
+        """, unsafe_allow_html=True)
         
         # Game controls
         st.markdown("### 🎮 Điều Khiển Trực Tiếp")
-        control_col1, control_col2, control_col3, control_col4, control_col5 = st.columns(5)
+        control_cols = st.columns(5)
         
-        with control_col1:
-            accelerate = st.button("↑ Tăng tốc", use_container_width=True)
-            if accelerate:
+        with control_cols[0]:
+            if st.button("↑ Tăng tốc", use_container_width=True, key="btn_up"):
                 st.session_state.keys_pressed['up'] = True
-            else:
-                st.session_state.keys_pressed['up'] = False
+                st.rerun()
         
-        with control_col2:
-            brake = st.button("↓ Phanh", use_container_width=True)
-            if brake:
+        with control_cols[1]:
+            if st.button("↓ Phanh", use_container_width=True, key="btn_down"):
                 st.session_state.keys_pressed['down'] = True
-            else:
-                st.session_state.keys_pressed['down'] = False
+                st.rerun()
         
-        with control_col3:
-            left = st.button("← Trái", use_container_width=True)
-            if left:
+        with control_cols[2]:
+            if st.button("← Trái", use_container_width=True, key="btn_left"):
                 st.session_state.keys_pressed['left'] = True
-            else:
-                st.session_state.keys_pressed['left'] = False
+                st.rerun()
         
-        with control_col4:
-            right = st.button("→ Phải", use_container_width=True)
-            if right:
+        with control_cols[3]:
+            if st.button("→ Phải", use_container_width=True, key="btn_right"):
                 st.session_state.keys_pressed['right'] = True
-            else:
-                st.session_state.keys_pressed['right'] = False
+                st.rerun()
         
-        with control_col5:
-            handbrake = st.button("Space Phanh tay", use_container_width=True)
-            if handbrake:
+        with control_cols[4]:
+            if st.button("Space Phanh tay", use_container_width=True, key="btn_space"):
                 st.session_state.keys_pressed['space'] = True
-            else:
-                st.session_state.keys_pressed['space'] = False
+                st.rerun()
     
     with col2:
         # Car info
         st.subheader("🚗 Thông Tin Xe")
-        st.progress(game.player.health/100, f"Sức khỏe: {game.player.health:.0f}%")
-        st.progress(game.player.damage/100, f"Hư hại: {game.player.damage:.0f}%")
+        st.progress(game.player['health']/100, f"Sức khỏe: {game.player['health']:.0f}%")
+        st.progress(game.player['damage']/100, f"Hư hại: {game.player['damage']:.0f}%")
         
-        speed = game.player.velocity.magnitude() * 20
+        speed = math.sqrt(game.player['vx']**2 + game.player['vy']**2) * 20
         st.metric("📊 Tốc độ", f"{speed:.0f} km/h")
-        st.metric("🎯 Hướng", f"{game.player.angle:.0f}°")
-        
-        # Crash force
-        if game.total_crashes > 0:
-            st.metric("💥 Lực va chạm TB", f"{game.max_damage/game.total_crashes:.1f}")
+        st.metric("🎯 Hướng", f"{game.player['angle']:.0f}°")
         
         # Quick actions
         st.subheader("⚡ Hành Động Nhanh")
         if st.button("💥 Va chạm mạnh!", use_container_width=True):
-            game.player.velocity = Vec2(15, 0)
-            nearest_ai = min(game.ai_cars, key=lambda c: c.position.distance(game.player.position))
-            game.player.apply_crash(20, nearest_ai.position)
-            nearest_ai.apply_crash(20, game.player.position)
+            game.player['vx'] = 15
+            if game.ai_cars:
+                nearest = min(game.ai_cars, key=lambda c: 
+                            math.sqrt((c['x']-game.player['x'])**2 + (c['y']-game.player['y'])**2))
+                force = 20
+                game.player['health'] -= force * 2
+                game.player['damage'] += force * 2
+                nearest['health'] -= force * 2
+                nearest['damage'] += force * 2
+                game.total_crashes += 1
+                game.score += int(force * 10)
         
         if st.button("🔄 Đặt lại vị trí", use_container_width=True):
-            game.player.position = Vec2(400, 300)
-            game.player.velocity = Vec2(0, 0)
-            game.player.health = 100
-    
-    # Game loop
-    if st.session_state.game_running:
-        current_time = time.time()
-        dt = (current_time - st.session_state.last_update)
+            game.player['x'] = 400
+            game.player['y'] = 300
+            game.player['vx'] = 0
+            game.player['vy'] = 0
+            game.player['health'] = 100
         
-        if dt > 0.016:  # ~60 FPS
-            game.update(dt * damage_multiplier)
-            
-            # Vẽ game
-            game_img = game.draw(800, 600)
-            
-            # Hiển thị
-            game_container.image(game_img, use_column_width=True)
-            
-            st.session_state.last_update = current_time
-            st.rerun()
-    else:
-        # Chỉ vẽ một frame tĩnh
-        game_img = game.draw(800, 600)
-        game_container.image(game_img, use_column_width=True)
+        if st.button("🔧 Sửa xe", use_container_width=True):
+            game.player['health'] = min(100, game.player['health'] + 30)
+            game.player['damage'] = max(0, game.player['damage'] - 20)
     
     # Game description
     st.markdown("---")
@@ -1098,7 +1049,6 @@ def main():
             - **Hệ thống đường** với vạch kẻ
             - **Tòa nhà** và cơ sở hạ tầng
             - **Cây cối** và vật cản
-            - **Đèn giao thông** hoạt động
             - **Camera follow** với zoom linh hoạt
             
             ### 🚗 XE AI THÔNG MINH:
@@ -1108,44 +1058,15 @@ def main():
             - **Màu sắc đa dạng**
             """)
     
-    # Keyboard event handling
-    st.markdown("""
-    <script>
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'ArrowUp') {
-            window.parent.postMessage({type: 'keydown', key: 'up'}, '*');
-        } else if (e.key === 'ArrowDown') {
-            window.parent.postMessage({type: 'keydown', key: 'down'}, '*');
-        } else if (e.key === 'ArrowLeft') {
-            window.parent.postMessage({type: 'keydown', key: 'left'}, '*');
-        } else if (e.key === 'ArrowRight') {
-            window.parent.postMessage({type: 'keydown', key: 'right'}, '*');
-        } else if (e.key === ' ') {
-            window.parent.postMessage({type: 'keydown', key: 'space'}, '*');
-        } else if (e.key === 'r' || e.key === 'R') {
-            window.parent.postMessage({type: 'keydown', key: 'reset'}, '*');
-        } else if (e.key === 'z' || e.key === 'Z') {
-            window.parent.postMessage({type: 'keydown', key: 'zoomin'}, '*');
-        } else if (e.key === 'x' || e.key === 'X') {
-            window.parent.postMessage({type: 'keydown', key: 'zoomout'}, '*');
-        }
-    });
-    
-    document.addEventListener('keyup', function(e) {
-        if (e.key === 'ArrowUp') {
-            window.parent.postMessage({type: 'keyup', key: 'up'}, '*');
-        } else if (e.key === 'ArrowDown') {
-            window.parent.postMessage({type: 'keyup', key: 'down'}, '*');
-        } else if (e.key === 'ArrowLeft') {
-            window.parent.postMessage({type: 'keyup', key: 'left'}, '*');
-        } else if (e.key === 'ArrowRight') {
-            window.parent.postMessage({type: 'keyup', key: 'right'}, '*');
-        } else if (e.key === ' ') {
-            window.parent.postMessage({type: 'keyup', key: 'space'}, '*');
-        }
-    });
-    </script>
-    """, unsafe_allow_html=True)
+    # API endpoints cho game loop
+    if st.session_state.game_running:
+        current_time = time.time()
+        dt = current_time - game.last_update
+        
+        if dt > 0.016:  # ~60 FPS
+            game.update(dt)
+            game.last_update = current_time
+            st.rerun()
 
 if __name__ == "__main__":
     main()
