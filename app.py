@@ -168,9 +168,9 @@ class PixelCarGame:
         self.buildings = []
         self.obstacles = []
         
-        # Game stats
+        # Game stats - SỬA LỖI: chỉ dùng một biến total_crashes thay vì crashes
         self.score = 0
-        self.crashes = 0
+        self.total_crashes = 0  # Sửa từ crashes thành total_crashes
         self.game_time = 0
         self.camera_x = self.player['x']
         self.camera_y = self.player['y']
@@ -512,8 +512,8 @@ class PixelCarGame:
                         ai['vx'] -= (dx / dist) * push
                         ai['vy'] -= (dy / dist) * push
                     
-                    # Cập nhật điểm
-                    self.crashes += 1
+                    # Cập nhật điểm - SỬA LỖI: dùng total_crashes thay vì crashes
+                    self.total_crashes += 1  # Sửa từ crashes thành total_crashes
                     self.score += int(force * 50)
                     
                     # Nếu AI bị phá hủy
@@ -532,6 +532,45 @@ class PixelCarGame:
                         self.score += 200
                         # Spawn xe AI mới
                         self.spawn_ai_cars(1)
+        
+        # Kiểm tra va chạm với vật cản
+        for obstacle in self.obstacles:
+            dx = self.player['x'] - obstacle['x']
+            dy = self.player['y'] - obstacle['y']
+            distance = math.sqrt(dx**2 + dy**2)
+            
+            # Nếu va chạm với vật cản
+            if distance < (self.player['width'] + obstacle['size']) / 2:
+                # Tính lực va chạm
+                speed = math.sqrt(self.player['vx']**2 + self.player['vy']**2)
+                force = speed
+                
+                if force > 0.5:
+                    # Damage nhẹ hơn
+                    damage = force * 10
+                    self.player['health'] = max(0, self.player['health'] - damage)
+                    self.player['damage'] = min(100, self.player['damage'] + damage)
+                    
+                    # Tạo particles
+                    for _ in range(int(force * 5)):
+                        self.create_particle(
+                            obstacle['x'],
+                            obstacle['y'],
+                            obstacle['color'],
+                            random.uniform(-force*2, force*2),
+                            random.uniform(-force*2, force*2),
+                            random.randint(2, 4)
+                        )
+                    
+                    # Đẩy xe ra
+                    if distance > 0:
+                        push = force * 1.5
+                        self.player['vx'] += (dx / distance) * push
+                        self.player['vy'] += (dy / distance) * push
+                    
+                    # Cập nhật điểm
+                    self.total_crashes += 1  # Sửa từ crashes thành total_crashes
+                    self.score += int(force * 20)
 
 # ==================== GIAO DIỆN STREAMLIT ====================
 
@@ -557,7 +596,8 @@ def main():
             </div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                 <span style="color: #4fc3f7;">🏆 {game.score:,}</span>
-                <span style="color: #ff6b6b;">💥 {game.crashes}</span>
+                <!-- SỬA LỖI: dùng total_crashes thay vì crashes -->
+                <span style="color: #ff6b6b;">💥 {game.total_crashes}</span>
             </div>
             
             <div class="health-bar">
@@ -589,7 +629,8 @@ def main():
         <div class="game-over" id="game-over">
             <h1 style="font-size: 48px; color: #ff6b6b;">💥 GAME OVER</h1>
             <h2 style="font-size: 32px;">Score: {game.score:,}</h2>
-            <h3 style="font-size: 24px;">Crashes: {game.crashes}</h3>
+            <!-- SỬA LỖI: dùng total_crashes thay vì crashes -->
+            <h3 style="font-size: 24px;">Crashes: {game.total_crashes}</h3>
             <h3 style="font-size: 24px;">Time: {int(game.game_time)}s</h3>
             <button onclick="location.reload()" style="
                 background: linear-gradient(45deg, #ff6b6b, #ffa500);
@@ -918,7 +959,8 @@ def main():
                                 </div>
                                 <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                                     <span style="color: #4fc3f7;">🏆 ${data.ui_update.score.toLocaleString()}</span>
-                                    <span style="color: #ff6b6b;">💥 ${data.ui_update.crashes}</span>
+                                    <!-- SỬA LỖI: dùng total_crashes thay vì crashes -->
+                                    <span style="color: #ff6b6b;">💥 ${data.ui_update.total_crashes}</span>
                                 </div>
                                 <div class="health-bar">
                                     <div class="health-fill" style="width: ${data.ui_update.health}%"></div>
@@ -1036,14 +1078,26 @@ def main():
     
     st.markdown(game_js, unsafe_allow_html=True)
     
+    # Thêm hướng dẫn điều khiển
+    st.markdown("""
+    <div style="position: fixed; bottom: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 10px; border-radius: 5px; font-size: 12px; z-index: 1000; font-family: monospace;">
+        <strong>CONTROLS:</strong><br>
+        <span style="color: #4fc3f7;">W/↑</span>: Accelerate | 
+        <span style="color: #4fc3f7;">S/↓</span>: Brake<br>
+        <span style="color: #4fc3f7;">A/←</span>: Left | 
+        <span style="color: #4fc3f7;">D/→</span>: Right<br>
+        <span style="color: #4fc3f7;">Space</span>: Handbrake
+    </div>
+    """, unsafe_allow_html=True)
+    
     # Xử lý các request từ JavaScript
-    if st.rerun:
-        try:
-            # Lấy data từ request (giả lập)
+    try:
+        if st.rerun:
             current_time = time.time()
             dt = current_time - game.last_update
             
             if dt > 0.016:  # ~60 FPS
+                # Cập nhật game
                 game.update(dt)
                 game.last_update = current_time
                 
@@ -1065,7 +1119,8 @@ def main():
                     },
                     'ui_update': {
                         'score': game.score,
-                        'crashes': game.crashes,
+                        # SỬA LỖI: dùng total_crashes thay vì crashes
+                        'total_crashes': game.total_crashes,
                         'health': game.player['health'],
                         'damage': game.player['damage'],
                         'ai_count': len(game.ai_cars),
@@ -1077,8 +1132,10 @@ def main():
                 
                 # Force rerun để cập nhật
                 st.rerun()
-        except:
-            pass
+    except Exception as e:
+        # Nếu có lỗi, tạo game mới
+        st.session_state.game = PixelCarGame()
+        st.rerun()
 
 if __name__ == "__main__":
     main()
