@@ -1,8 +1,7 @@
 import streamlit as st
 
-st.set_page_config(page_title="2D Pixel Car Crash - Deform", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Soft‑Body Pixel Car Crash", layout="wide", initial_sidebar_state="collapsed")
 
-# Ẩn giao diện Streamlit
 st.markdown("""
 <style>
     #MainMenu, footer, header {display: none;}
@@ -11,13 +10,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-game_html = """
+# Toàn bộ mã game (JavaScript + HTML) được nhúng dưới đây
+GAME_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>2D Deformable Pixel Car Crash</title>
+    <title>Soft‑Body Pixel Crash</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-tap-highlight-color: transparent; }
         body { background: black; overflow: hidden; touch-action: none; }
@@ -25,7 +25,7 @@ game_html = """
             display: block;
             width: 100vw;
             height: 100vh;
-            background: #1a2a2a;
+            background: #1a2c2c;
             image-rendering: pixelated;
             image-rendering: crisp-edges;
         }
@@ -47,12 +47,21 @@ game_html = """
         }
         #ui div { margin: 4px 0; }
         #speedometer { font-size: 18px; color: #ffaa00; }
+        .health-bar {
+            width: 100%;
+            height: 10px;
+            background: #333;
+            border-radius: 5px;
+            margin: 5px 0;
+            overflow: hidden;
+        }
+        .health-fill { height: 100%; background: #4caf50; }
         #mobile-controls {
             position: absolute;
             bottom: 30px;
             left: 0;
             width: 100%;
-            display: none;  /* ẩn trên PC, hiện trên mobile */
+            display: none;
             justify-content: center;
             gap: 15px;
             padding: 0 15px;
@@ -80,7 +89,6 @@ game_html = """
             backdrop-filter: blur(5px);
             box-shadow: 0 0 15px #4fc3f7;
             touch-action: manipulation;
-            transition: 0.1s;
             font-weight: bold;
         }
         .ctrl-btn:active {
@@ -98,11 +106,20 @@ game_html = """
     <canvas id="gameCanvas"></canvas>
 
     <div id="ui">
-        <div style="font-size: 18px; font-weight: bold; color: #4fc3f7;">💥 PIXEL CRASH</div>
+        <div style="font-size: 18px; font-weight: bold; color: #4fc3f7;">💥 SOFT‑BODY CRASH</div>
         <div>🏆 ĐIỂM: <span id="score">0</span></div>
         <div>💥 VA CHẠM: <span id="crashes">0</span></div>
         <div id="speedometer">⚡ <span id="speed">0</span> km/h</div>
-        <div>🛞 ĐỘNG CƠ: <span id="engine">100%</span></div>
+        <div>🛞 ĐỘNG CƠ</div>
+        <div class="health-bar"><div id="engine-health" class="health-fill" style="width:100%"></div></div>
+        <div>🚪 CỬA TRÁI</div>
+        <div class="health-bar"><div id="doorL-health" class="health-fill" style="width:100%"></div></div>
+        <div>🚪 CỬA PHẢI</div>
+        <div class="health-bar"><div id="doorR-health" class="health-fill" style="width:100%"></div></div>
+        <div>⚙️ BÁNH TRÁI</div>
+        <div class="health-bar"><div id="wheelL-health" class="health-fill" style="width:100%"></div></div>
+        <div>⚙️ BÁNH PHẢI</div>
+        <div class="health-bar"><div id="wheelR-health" class="health-fill" style="width:100%"></div></div>
     </div>
 
     <div id="mobile-controls">
@@ -135,158 +152,352 @@ game_html = """
                 camera: { x: 0, y: 0 }
             };
 
-            // ---------- HÌNH DẠNG XE (PIXEL) ----------
-            // Xe được định nghĩa bởi một mảng 2D các pixel (màu sắc).
-            // Khi va chạm, các pixel tại vùng va chạm sẽ bị xóa (chuyển thành trong suốt) hoặc chuyển màu tối.
-            const CAR_WIDTH = 30;   // pixel
-            const CAR_HEIGHT = 50;
-            
-            // Tạo hình dạng xe ban đầu (màu sắc)
-            function createCarShape() {
-                const shape = [];
-                for (let row = 0; row < CAR_HEIGHT; row++) {
-                    const line = [];
-                    for (let col = 0; col < CAR_WIDTH; col++) {
-                        // Xác định màu dựa trên vị trí (tạo hình xe đơn giản)
-                        let color = '#2277cc'; // thân chính
-                        
-                        // Động cơ (mũi xe) phía trên
-                        if (row < 10) {
-                            if (col > 8 && col < 22) color = '#44aaff'; // kính chắn gió
-                            else color = '#115599'; // nắp capo
+            // ==================== SOFT‑BODY XE ====================
+            // Xe được định nghĩa bởi 20 điểm (vertices) và các lò xo (springs)
+            class SoftCar {
+                constructor(x, y, color) {
+                    this.x = x;
+                    this.y = y;
+                    this.color = color;
+                    this.points = [];
+                    this.springs = [];
+                    this.angle = 0; // không dùng trực tiếp, do soft-body tự biến dạng
+                    
+                    // Khởi tạo các điểm – hình chữ nhật bo tròn (12 điểm ngoài + 8 điểm trong)
+                    // Tạo lưới 5x4 điểm
+                    const cols = 5;
+                    const rows = 4;
+                    const w = 60; // chiều rộng
+                    const h = 40; // chiều cao
+                    for (let row = 0; row < rows; row++) {
+                        for (let col = 0; col < cols; col++) {
+                            const px = (col / (cols-1) - 0.5) * w;
+                            const py = (row / (rows-1) - 0.5) * h;
+                            this.points.push({
+                                x: px, y: py,
+                                vx: 0, vy: 0,
+                                mass: 1,
+                                pinned: false
+                            });
                         }
-                        // Cửa sổ
-                        if (row > 12 && row < 25 && col > 5 && col < 25) {
-                            if (col > 10 && col < 20 && row > 15 && row < 22) color = '#aaddff'; // kính cửa
-                            else color = '#3366aa';
-                        }
-                        // Bánh xe (màu đen)
-                        if ((row < 8 || row > 42) && (col < 8 || col > 22)) color = '#222222';
-                        // Đèn trước
-                        if (row < 5 && (col < 5 || col > 25)) color = '#ffffaa';
-                        // Đèn sau
-                        if (row > 45 && (col < 5 || col > 25)) color = '#ff5555';
-                        
-                        line.push(color);
                     }
-                    shape.push(line);
+                    
+                    // Tạo lò xo giữa các điểm kề nhau (theo hàng và cột)
+                    for (let row = 0; row < rows; row++) {
+                        for (let col = 0; col < cols; col++) {
+                            const idx = row * cols + col;
+                            // hàng ngang
+                            if (col < cols-1) {
+                                const idx2 = row * cols + (col+1);
+                                this.addSpring(idx, idx2);
+                            }
+                            // hàng dọc
+                            if (row < rows-1) {
+                                const idx2 = (row+1) * cols + col;
+                                this.addSpring(idx, idx2);
+                            }
+                            // đường chéo (tùy chọn, tăng độ cứng)
+                            if (col < cols-1 && row < rows-1) {
+                                const idx2 = (row+1) * cols + (col+1);
+                                this.addSpring(idx, idx2, 0.5); // độ cứng thấp hơn
+                            }
+                            if (col > 0 && row < rows-1) {
+                                const idx2 = (row+1) * cols + (col-1);
+                                this.addSpring(idx, idx2, 0.5);
+                            }
+                        }
+                    }
+                    
+                    // Đánh dấu các bánh xe (các góc) để xác định hư hỏng sau
+                    this.wheelIndices = [0, cols-1, (rows-1)*cols, rows*cols-1];
+                    this.doorIndices = [1, 2, cols+1, cols*2+1]; // ví dụ
+                    this.engineIndices = [cols*2+2, cols*2+3]; // tạm
+                    
+                    // Lưu trạng thái hư hỏng
+                    this.damage = {
+                        engine: 100,
+                        doorL: 100,
+                        doorR: 100,
+                        wheelL: 100,
+                        wheelR: 100
+                    };
+                    
+                    // Smoker
+                    this.smokeParticles = [];
                 }
-                return shape;
+                
+                addSpring(i, j, strength = 1.0) {
+                    const p1 = this.points[i];
+                    const p2 = this.points[j];
+                    const dx = p1.x - p2.x;
+                    const dy = p1.y - p2.y;
+                    const restLength = Math.hypot(dx, dy);
+                    this.springs.push({
+                        i, j,
+                        restLength,
+                        strength: 0.3 * strength, // độ cứng
+                        damping: 0.1
+                    });
+                }
+                
+                // Áp dụng vật lý lò xo
+                applySpringForces() {
+                    for (let s of this.springs) {
+                        const p1 = this.points[s.i];
+                        const p2 = this.points[s.j];
+                        const dx = p2.x - p1.x;
+                        const dy = p2.y - p1.y;
+                        const dist = Math.hypot(dx, dy);
+                        if (dist === 0) continue;
+                        const force = (dist - s.restLength) * s.strength;
+                        const nx = dx / dist;
+                        const ny = dy / dist;
+                        
+                        // Lực tác dụng lên hai điểm
+                        const fx = nx * force;
+                        const fy = ny * force;
+                        if (!p1.pinned) {
+                            p1.vx += fx * 0.5;
+                            p1.vy += fy * 0.5;
+                        }
+                        if (!p2.pinned) {
+                            p2.vx -= fx * 0.5;
+                            p2.vy -= fy * 0.5;
+                        }
+                        
+                        // Giảm chấn (damping)
+                        const vdx = p2.vx - p1.vx;
+                        const vdy = p2.vy - p1.vy;
+                        const damping = s.damping;
+                        if (!p1.pinned) {
+                            p1.vx += vdx * damping;
+                            p1.vy += vdy * damping;
+                        }
+                        if (!p2.pinned) {
+                            p2.vx -= vdx * damping;
+                            p2.vy -= vdy * damping;
+                        }
+                    }
+                }
+                
+                // Cập nhật vị trí các điểm
+                update(dt) {
+                    // Lực lò xo
+                    this.applySpringForces();
+                    
+                    // Trọng lực (có thể bỏ qua)
+                    // for (let p of this.points) {
+                    //     p.vy += 0.05;
+                    // }
+                    
+                    // Ma sát không khí
+                    for (let p of this.points) {
+                        p.vx *= 0.99;
+                        p.vy *= 0.99;
+                    }
+                    
+                    // Di chuyển
+                    for (let p of this.points) {
+                        p.x += p.vx;
+                        p.y += p.vy;
+                    }
+                    
+                    // Giới hạn trong thế giới (để không bay ra ngoài)
+                    for (let p of this.points) {
+                        if (p.x < 0) { p.x = 0; p.vx *= -0.3; }
+                        if (p.x > world.width) { p.x = world.width; p.vx *= -0.3; }
+                        if (p.y < 0) { p.y = 0; p.vy *= -0.3; }
+                        if (p.y > world.height) { p.y = world.height; p.vy *= -0.3; }
+                    }
+                    
+                    // Cập nhật vị trí tổng thể (lấy trung bình)
+                    this.x = 0; this.y = 0;
+                    for (let p of this.points) {
+                        this.x += p.x;
+                        this.y += p.y;
+                    }
+                    this.x /= this.points.length;
+                    this.y /= this.points.length;
+                    
+                    // Cập nhật damage dựa trên độ biến dạng của lò xo
+                    let engineStress = 0, doorLStress = 0, doorRStress = 0, wheelLStress = 0, wheelRStress = 0;
+                    for (let s of this.springs) {
+                        const p1 = this.points[s.i];
+                        const p2 = this.points[s.j];
+                        const dx = p2.x - p1.x;
+                        const dy = p2.y - p1.y;
+                        const dist = Math.hypot(dx, dy);
+                        const stretch = Math.abs(dist - s.restLength) / s.restLength;
+                        // Nếu lò xo thuộc vùng nào đó thì tăng stress
+                        if (this.engineIndices.includes(s.i) || this.engineIndices.includes(s.j)) {
+                            engineStress += stretch;
+                        }
+                        if (this.doorIndices.includes(s.i) || this.doorIndices.includes(s.j)) {
+                            doorLStress += stretch; // phân biệt trái/phải cần logic phức tạp hơn
+                        }
+                        if (this.wheelIndices.includes(s.i) || this.wheelIndices.includes(s.j)) {
+                            wheelLStress += stretch;
+                        }
+                    }
+                    // Giảm máu
+                    this.damage.engine = Math.max(0, this.damage.engine - engineStress * 0.1);
+                    this.damage.doorL = Math.max(0, this.damage.doorL - doorLStress * 0.05);
+                    this.damage.doorR = Math.max(0, this.damage.doorR - doorLStress * 0.05);
+                    this.damage.wheelL = Math.max(0, this.damage.wheelL - wheelLStress * 0.2);
+                    this.damage.wheelR = Math.max(0, this.damage.wheelR - wheelLStress * 0.2);
+                    
+                    // Tạo khói nếu động cơ yếu
+                    if (this.damage.engine < 40 && Math.random() < 0.1) {
+                        this.smokeParticles.push({
+                            x: this.x + (Math.random()-0.5)*20,
+                            y: this.y + (Math.random()-0.5)*20,
+                            vx: (Math.random()-0.5)*1,
+                            vy: -Math.random()*2,
+                            life: 1.0,
+                            size: 5+Math.random()*10
+                        });
+                    }
+                    // Lọc khói
+                    this.smokeParticles = this.smokeParticles.filter(p => {
+                        p.x += p.vx;
+                        p.y += p.vy;
+                        p.life -= 0.01;
+                        return p.life > 0;
+                    });
+                }
+                
+                // Vẽ xe (dùng các điểm để tạo đa giác)
+                draw(ctx, offsetX, offsetY) {
+                    // Vẽ các mặt (tô màu)
+                    ctx.fillStyle = this.color;
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 2;
+                    
+                    // Sắp xếp các điểm theo thứ tự bao quanh (đơn giản: vẽ từng tam giác từ điểm đầu)
+                    // Thực tế nên dùng delaunay, nhưng ở đây ta vẽ các ô lưới
+                    const cols = 5;
+                    const rows = 4;
+                    for (let row = 0; row < rows-1; row++) {
+                        for (let col = 0; col < cols-1; col++) {
+                            const i0 = row * cols + col;
+                            const i1 = row * cols + (col+1);
+                            const i2 = (row+1) * cols + col;
+                            const i3 = (row+1) * cols + (col+1);
+                            
+                            const p0 = this.points[i0];
+                            const p1 = this.points[i1];
+                            const p2 = this.points[i2];
+                            const p3 = this.points[i3];
+                            
+                            // Vẽ hai tam giác
+                            ctx.beginPath();
+                            ctx.moveTo(offsetX + p0.x, offsetY + p0.y);
+                            ctx.lineTo(offsetX + p1.x, offsetY + p1.y);
+                            ctx.lineTo(offsetX + p2.x, offsetY + p2.y);
+                            ctx.closePath();
+                            ctx.fill();
+                            ctx.stroke();
+                            
+                            ctx.beginPath();
+                            ctx.moveTo(offsetX + p1.x, offsetY + p1.y);
+                            ctx.lineTo(offsetX + p3.x, offsetY + p3.y);
+                            ctx.lineTo(offsetX + p2.x, offsetY + p2.y);
+                            ctx.closePath();
+                            ctx.fill();
+                            ctx.stroke();
+                        }
+                    }
+                    
+                    // Vẽ bánh xe (các điểm góc)
+                    ctx.fillStyle = '#222';
+                    for (let idx of this.wheelIndices) {
+                        const p = this.points[idx];
+                        ctx.beginPath();
+                        ctx.arc(offsetX + p.x, offsetY + p.y, 6, 0, 2*Math.PI);
+                        ctx.fill();
+                    }
+                    
+                    // Vẽ khói
+                    ctx.globalAlpha = 0.5;
+                    for (let p of this.smokeParticles) {
+                        ctx.fillStyle = '#888';
+                        ctx.beginPath();
+                        ctx.arc(offsetX + p.x, offsetY + p.y, p.size * p.life, 0, 2*Math.PI);
+                        ctx.fill();
+                    }
+                    ctx.globalAlpha = 1.0;
+                }
+                
+                // Tác động lực điều khiển (ví dụ đẩy các điểm phía sau)
+                applyControlForce(direction, strength) {
+                    // direction: 0 = lên (tiến), 1 = xuống (lùi), 2 = trái, 3 = phải
+                    // Chọn các điểm phía sau (theo chiều dọc)
+                    const cols = 5;
+                    const rows = 4;
+                    for (let col = 1; col < cols-1; col++) {
+                        const idx = (rows-1) * cols + col; // hàng cuối
+                        const p = this.points[idx];
+                        if (direction === 0) { // tiến
+                            p.vy -= strength;
+                        } else if (direction === 1) { // lùi
+                            p.vy += strength;
+                        }
+                    }
+                    // Lái: tác động lệch bên
+                    if (direction === 2) { // trái
+                        for (let row = 0; row < rows; row++) {
+                            const idx = row * cols; // cột trái
+                            const p = this.points[idx];
+                            p.vx -= strength * 0.5;
+                        }
+                    } else if (direction === 3) { // phải
+                        for (let row = 0; row < rows; row++) {
+                            const idx = row * cols + (cols-1); // cột phải
+                            const p = this.points[idx];
+                            p.vx += strength * 0.5;
+                        }
+                    }
+                }
+                
+                // Phanh tay: tăng ma sát các điểm bánh
+                handbrake() {
+                    for (let idx of this.wheelIndices) {
+                        const p = this.points[idx];
+                        p.vx *= 0.8;
+                        p.vy *= 0.8;
+                    }
+                }
             }
 
-            // Xe người chơi
-            const player = {
-                x: 1500, y: 1500,
-                vx: 0, vy: 0,
-                angle: 0,
-                width: CAR_WIDTH,
-                height: CAR_HEIGHT,
-                shape: createCarShape(),  // ma trận màu (pixel)
-                health: 100,
-                engineHealth: 100,
-                // Các thông số vật lý
-                maxSpeed: 5,
-                acceleration: 0.2,
-                turnSpeed: 0.03,
-                friction: 0.98
-            };
-
-            // ---------- XE AI ----------
+            // Tạo xe người chơi
+            const player = new SoftCar(1500, 1500, '#2277cc');
+            
+            // Tạo xe AI (đơn giản hóa, không dùng soft-body cho AI để tăng hiệu suất)
             const aiCars = [];
-            function createAICar(x, y) {
-                return {
-                    x: x, y: y,
-                    vx: 0, vy: 0,
-                    angle: Math.random() * Math.PI * 2,
-                    width: CAR_WIDTH,
-                    height: CAR_HEIGHT,
-                    shape: createCarShape(), // mỗi AI có hình dạng riêng (có thể random màu)
-                    color: `hsl(${Math.random()*360}, 70%, 50%)`,
-                    maxSpeed: 2 + Math.random() * 2,
-                    turnSpeed: 0.02,
-                    targetX: x + (Math.random()-0.5)*500,
-                    targetY: y + (Math.random()-0.5)*500,
-                    aiTimer: 0
-                };
-            }
-            for (let i = 0; i < 6; i++) {
-                aiCars.push(createAICar(500+Math.random()*2000, 500+Math.random()*2000));
+            for (let i = 0; i < 4; i++) {
+                aiCars.push(new SoftCar(1000+Math.random()*1000, 1000+Math.random()*1000, '#cc4444'));
             }
 
             // ---------- VẬT CẢN ----------
             const obstacles = [];
             // Tường
-            obstacles.push({ x: world.width/2, y: -25, w: world.width, h: 50, type: 'wall', color: '#555' });
-            obstacles.push({ x: world.width/2, y: world.height+25, w: world.width, h: 50, color: '#555' });
-            obstacles.push({ x: -25, y: world.height/2, w: 50, h: world.height, color: '#555' });
-            obstacles.push({ x: world.width+25, y: world.height/2, w: 50, h: world.height, color: '#555' });
-            // Cây, nhà
-            for (let i = 0; i < 30; i++) {
+            obstacles.push({ x: world.width/2, y: -25, w: world.width, h: 50 });
+            obstacles.push({ x: world.width/2, y: world.height+25, w: world.width, h: 50 });
+            obstacles.push({ x: -25, y: world.height/2, w: 50, h: world.height });
+            obstacles.push({ x: world.width+25, y: world.height/2, w: 50, h: world.height });
+            // Cây cối
+            for (let i = 0; i < 20; i++) {
                 obstacles.push({
-                    x: 100 + Math.random() * 2800,
-                    y: 100 + Math.random() * 2800,
-                    w: 30 + Math.random()*30,
-                    h: 30 + Math.random()*30,
-                    color: `rgb(${30+Math.random()*50},${50+Math.random()*80},${20})`
+                    x: 200+Math.random()*2600,
+                    y: 200+Math.random()*2600,
+                    w: 30+Math.random()*30,
+                    h: 30+Math.random()*30
                 });
-            }
-
-            // ---------- HỆ THỐNG PIXEL VỠ (CRASH) ----------
-            const particles = [];
-            function createCrashParticles(x, y, color, count) {
-                for (let i = 0; i < count; i++) {
-                    particles.push({
-                        x: x + (Math.random()-0.5)*20,
-                        y: y + (Math.random()-0.5)*20,
-                        vx: (Math.random()-0.5)*5,
-                        vy: (Math.random()-0.5)*5,
-                        size: 2 + Math.random()*4,
-                        color: color,
-                        life: 1.0
-                    });
-                }
-            }
-
-            // ---------- HÀM XÓA PIXEL TRÊN XE (LÕM) ----------
-            // Tại vị trí va chạm (world coordinates), xóa một vùng pixel trên shape của xe.
-            function deformCar(car, worldX, worldY, intensity) {
-                // Chuyển world coordinates về tọa độ xe (có tính góc)
-                const dx = worldX - car.x;
-                const dy = worldY - car.y;
-                // Xoay ngược
-                const cos = Math.cos(-car.angle);
-                const sin = Math.sin(-car.angle);
-                const localX = dx * cos - dy * sin;
-                const localY = dx * sin + dy * cos;
-                
-                // Tọa độ trong shape (gốc tại tâm xe)
-                const shapeX = Math.floor(localX + car.width/2);
-                const shapeY = Math.floor(localY + car.height/2);
-                
-                // Bán kính vùng xóa tỷ lệ với intensity
-                const radius = Math.max(2, Math.floor(intensity / 2));
-                
-                for (let dy = -radius; dy <= radius; dy++) {
-                    for (let dx = -radius; dx <= radius; dx++) {
-                        const ny = shapeY + dy;
-                        const nx = shapeX + dx;
-                        if (nx >= 0 && nx < car.width && ny >= 0 && ny < car.height) {
-                            // Khoảng cách từ tâm
-                            const dist = Math.hypot(dx, dy);
-                            if (dist <= radius) {
-                                // Xóa pixel (chuyển thành màu đen trong suốt? nhưng ta cần lõm -> vẽ màu nền?)
-                                // Ở đây ta đặt màu thành màu nền tối (mô phỏng lõm)
-                                car.shape[ny][nx] = '#331111'; // màu tối
-                            }
-                        }
-                    }
-                }
             }
 
             // ---------- ĐIỀU KHIỂN ----------
             const keys = { up: false, down: false, left: false, right: false, space: false };
             
-            // PC keyboard
             window.addEventListener('keydown', (e) => {
                 const k = e.key;
                 if (k === 'w' || k === 'W' || k === 'ArrowUp') { keys.up = true; e.preventDefault(); }
@@ -304,7 +515,7 @@ game_html = """
                 if (k === ' ') { keys.space = false; e.preventDefault(); }
             });
 
-            // Mobile touch controls
+            // Mobile controls
             document.querySelectorAll('.ctrl-btn').forEach(btn => {
                 const key = btn.dataset.key;
                 btn.addEventListener('touchstart', (e) => {
@@ -319,7 +530,6 @@ game_html = """
                     e.preventDefault();
                     keys[key] = false;
                 });
-                // Mouse events for testing on PC
                 btn.addEventListener('mousedown', (e) => { e.preventDefault(); keys[key] = true; });
                 btn.addEventListener('mouseup', (e) => { e.preventDefault(); keys[key] = false; });
                 btn.addEventListener('mouseleave', (e) => { keys[key] = false; });
@@ -330,188 +540,75 @@ game_html = """
             let totalCrashes = 0;
             let gameRunning = true;
 
-            // ---------- VẬT LÝ PLAYER ----------
-            function updatePlayer() {
-                // Điều khiển
-                if (keys.up) {
-                    player.vx += Math.sin(player.angle) * player.acceleration;
-                    player.vy += Math.cos(player.angle) * player.acceleration;
-                }
-                if (keys.down) {
-                    player.vx -= Math.sin(player.angle) * player.acceleration * 0.6;
-                    player.vy -= Math.cos(player.angle) * player.acceleration * 0.6;
-                }
-                if (keys.left) {
-                    player.angle -= player.turnSpeed * (keys.up ? 1 : 0.5);
-                }
-                if (keys.right) {
-                    player.angle += player.turnSpeed * (keys.up ? 1 : 0.5);
-                }
-                if (keys.space) {
-                    player.vx *= 0.9;
-                    player.vy *= 0.9;
-                }
-
-                // Giới hạn tốc độ
-                let speed = Math.hypot(player.vx, player.vy);
-                if (speed > player.maxSpeed) {
-                    player.vx = (player.vx / speed) * player.maxSpeed;
-                    player.vy = (player.vy / speed) * player.maxSpeed;
-                }
-
-                // Ma sát
-                player.vx *= player.friction;
-                player.vy *= player.friction;
-
-                // Cập nhật vị trí
-                player.x += player.vx;
-                player.y += player.vy;
-
-                // Giới hạn map
-                player.x = Math.max(30, Math.min(world.width - 30, player.x));
-                player.y = Math.max(30, Math.min(world.height - 30, player.y));
-
-                // Giảm dần máu động cơ theo thời gian nếu nặng?
-                // (có thể bỏ qua)
-            }
-
-            // ---------- AI ĐƠN GIẢN ----------
-            function updateAI() {
-                aiCars.forEach(ai => {
-                    ai.aiTimer += 0.01;
-                    if (ai.aiTimer > 3) {
-                        ai.targetX = player.x + (Math.random()-0.5)*400;
-                        ai.targetY = player.y + (Math.random()-0.5)*400;
-                        ai.aiTimer = 0;
-                    }
-                    const dx = ai.targetX - ai.x;
-                    const dy = ai.targetY - ai.y;
-                    const dist = Math.hypot(dx, dy);
-                    if (dist > 10) {
-                        const targetAngle = Math.atan2(dy, dx);
-                        let angleDiff = targetAngle - ai.angle;
-                        while (angleDiff > Math.PI) angleDiff -= Math.PI*2;
-                        while (angleDiff < -Math.PI) angleDiff += Math.PI*2;
-                        ai.angle += angleDiff * 0.03;
-                        
-                        ai.vx += Math.sin(ai.angle) * 0.1;
-                        ai.vy += Math.cos(ai.angle) * 0.1;
-                    }
-                    // Giới hạn tốc độ
-                    let sp = Math.hypot(ai.vx, ai.vy);
-                    if (sp > ai.maxSpeed) {
-                        ai.vx = (ai.vx / sp) * ai.maxSpeed;
-                        ai.vy = (ai.vy / sp) * ai.maxSpeed;
-                    }
-                    ai.x += ai.vx;
-                    ai.y += ai.vy;
-                    ai.vx *= 0.98;
-                    ai.vy *= 0.98;
-                    // Giới hạn map
-                    ai.x = Math.max(30, Math.min(world.width - 30, ai.x));
-                    ai.y = Math.max(30, Math.min(world.height - 30, ai.y));
-                });
-            }
-
-            // ---------- VA CHẠM ----------
-            function checkCollisions() {
-                // Player vs AI
-                aiCars.forEach(ai => {
-                    const dx = player.x - ai.x;
-                    const dy = player.y - ai.y;
-                    const dist = Math.hypot(dx, dy);
-                    const minDist = (player.height/2 + ai.height/2) * 0.8;
-                    if (dist < minDist) {
-                        // Tính lực va chạm
-                        const vRelX = player.vx - ai.vx;
-                        const vRelY = player.vy - ai.vy;
-                        const force = Math.hypot(vRelX, vRelY);
-                        
-                        if (force > 0.5) {
-                            // Tạo pixel vỡ
-                            createCrashParticles((player.x+ai.x)/2, (player.y+ai.y)/2, '#ffaa00', 15);
-                            
-                            // Làm lõm xe player tại điểm va chạm
-                            const crashX = (player.x + ai.x)/2;
-                            const crashY = (player.y + ai.y)/2;
-                            deformCar(player, crashX, crashY, force * 5);
-                            
-                            // Gây damage (giảm máu động cơ)
-                            player.engineHealth -= force * 2;
-                            if (player.engineHealth < 0) player.engineHealth = 0;
-                            
-                            score += Math.floor(force * 5);
-                            totalCrashes++;
-                            
-                            // Đẩy nhau
-                            if (dist > 0) {
-                                const normX = dx / dist;
-                                const normY = dy / dist;
-                                const overlap = minDist - dist;
-                                player.x += normX * overlap * 0.5;
-                                player.y += normY * overlap * 0.5;
-                                ai.x -= normX * overlap * 0.5;
-                                ai.y -= normY * overlap * 0.5;
+            // ---------- HÀM VA CHẠM (đơn giản) ----------
+            function handleCollisions() {
+                // Player vs AI cars (va chạm điểm - điểm)
+                for (let ai of aiCars) {
+                    for (let pi of player.points) {
+                        for (let pj of ai.points) {
+                            const dx = pi.x - pj.x;
+                            const dy = pi.y - pj.y;
+                            const dist = Math.hypot(dx, dy);
+                            if (dist < 10) { // ngưỡng va chạm
+                                // Tạo phản lực
+                                const force = 0.5;
+                                const nx = dx / (dist || 1);
+                                const ny = dy / (dist || 1);
+                                pi.vx += nx * force;
+                                pi.vy += ny * force;
+                                pj.vx -= nx * force;
+                                pj.vy -= ny * force;
                                 
-                                player.vx += normX * force * 0.3;
-                                player.vy += normY * force * 0.3;
-                                ai.vx -= normX * force * 0.3;
-                                ai.vy -= normY * force * 0.3;
+                                totalCrashes++;
+                                score += Math.floor(Math.hypot(pi.vx, pi.vy) * 5);
+                                
+                                // Làm hỏng xe (dựa trên vị trí va chạm)
+                                // ... (có thể thêm)
                             }
                         }
                     }
-                });
-
-                // Player vs obstacles
-                obstacles.forEach(obs => {
-                    const halfW = player.width/2;
-                    const halfH = player.height/2;
-                    const obsHalfW = obs.w/2;
-                    const obsHalfH = obs.h/2;
-                    
-                    if (Math.abs(player.x - obs.x) < halfW + obsHalfW &&
-                        Math.abs(player.y - obs.y) < halfH + obsHalfH) {
-                        
-                        const speed = Math.hypot(player.vx, player.vy);
-                        if (speed > 0.2) {
-                            createCrashParticles(player.x, player.y, obs.color || '#888', 10);
-                            deformCar(player, player.x, player.y, speed * 8);
-                            player.engineHealth -= speed * 3;
-                            score += Math.floor(speed * 2);
-                            totalCrashes++;
+                }
+                
+                // Player vs obstacles (hình chữ nhật)
+                for (let obs of obstacles) {
+                    for (let p of player.points) {
+                        if (p.x > obs.x - obs.w/2 && p.x < obs.x + obs.w/2 &&
+                            p.y > obs.y - obs.h/2 && p.y < obs.y + obs.h/2) {
+                            // Đẩy điểm ra khỏi vật cản
+                            const left = p.x - (obs.x - obs.w/2);
+                            const right = (obs.x + obs.w/2) - p.x;
+                            const top = p.y - (obs.y - obs.h/2);
+                            const bottom = (obs.y + obs.h/2) - p.y;
                             
-                            // Đẩy lùi
-                            const dx = player.x - obs.x;
-                            const dy = player.y - obs.y;
-                            const overlapX = halfW + obsHalfW - Math.abs(dx);
-                            const overlapY = halfH + obsHalfH - Math.abs(dy);
-                            if (overlapX < overlapY) {
-                                player.x += (dx > 0 ? overlapX : -overlapX) * 1.2;
-                                player.vx *= -0.3;
+                            const minX = Math.min(left, right);
+                            const minY = Math.min(top, bottom);
+                            
+                            if (minX < minY) {
+                                if (left < right) {
+                                    p.x = obs.x - obs.w/2 - 1;
+                                    p.vx = -Math.abs(p.vx) * 0.3;
+                                } else {
+                                    p.x = obs.x + obs.w/2 + 1;
+                                    p.vx = Math.abs(p.vx) * 0.3;
+                                }
                             } else {
-                                player.y += (dy > 0 ? overlapY : -overlapY) * 1.2;
-                                player.vy *= -0.3;
+                                if (top < bottom) {
+                                    p.y = obs.y - obs.h/2 - 1;
+                                    p.vy = -Math.abs(p.vy) * 0.3;
+                                } else {
+                                    p.y = obs.y + obs.h/2 + 1;
+                                    p.vy = Math.abs(p.vy) * 0.3;
+                                }
                             }
+                            
+                            totalCrashes++;
+                            score += Math.floor(Math.hypot(p.vx, p.vy) * 2);
                         }
-                    }
-                });
-            }
-
-            // ---------- CẬP NHẬT HIỆU ỨNG ----------
-            function updateParticles() {
-                for (let i = particles.length - 1; i >= 0; i--) {
-                    const p = particles[i];
-                    p.x += p.vx;
-                    p.y += p.vy;
-                    p.vy += 0.05; // gravity
-                    p.life -= 0.01;
-                    if (p.life <= 0) {
-                        particles.splice(i, 1);
                     }
                 }
             }
 
-            // ---------- CAMERA FOLLOW ----------
+            // ---------- CAMERA ----------
             function updateCamera() {
                 world.camera.x = player.x - canvas.width/2;
                 world.camera.y = player.y - canvas.height/2;
@@ -523,87 +620,59 @@ game_html = """
             function draw() {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 
-                function toScreenX(wx) { return wx - world.camera.x; }
-                function toScreenY(wy) { return wy - world.camera.y; }
-
+                const camX = world.camera.x;
+                const camY = world.camera.y;
+                
                 // Nền
-                ctx.fillStyle = '#1a2a2a';
+                ctx.fillStyle = '#1a2c2c';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-                // Vẽ lưới đường
-                ctx.strokeStyle = '#3a4a3a';
+                
+                // Lưới đường
+                ctx.strokeStyle = '#3a5a5a';
                 ctx.lineWidth = 1;
                 const grid = 100;
-                const startX = Math.floor(world.camera.x / grid) * grid;
-                const startY = Math.floor(world.camera.y / grid) * grid;
-                for (let x = startX; x < world.camera.x + canvas.width; x += grid) {
+                const startX = Math.floor(camX / grid) * grid;
+                const startY = Math.floor(camY / grid) * grid;
+                for (let x = startX; x < camX + canvas.width; x += grid) {
                     ctx.beginPath();
-                    ctx.moveTo(toScreenX(x), 0);
-                    ctx.lineTo(toScreenX(x), canvas.height);
-                    ctx.strokeStyle = '#3a4a3a';
+                    ctx.moveTo(x - camX, 0);
+                    ctx.lineTo(x - camX, canvas.height);
                     ctx.stroke();
                 }
-                for (let y = startY; y < world.camera.y + canvas.height; y += grid) {
+                for (let y = startY; y < camY + canvas.height; y += grid) {
                     ctx.beginPath();
-                    ctx.moveTo(0, toScreenY(y));
-                    ctx.lineTo(canvas.width, toScreenY(y));
-                    ctx.strokeStyle = '#3a4a3a';
+                    ctx.moveTo(0, y - camY);
+                    ctx.lineTo(canvas.width, y - camY);
                     ctx.stroke();
                 }
-
+                
                 // Vẽ vật cản
-                obstacles.forEach(obs => {
-                    const sx = toScreenX(obs.x - obs.w/2);
-                    const sy = toScreenY(obs.y - obs.h/2);
-                    ctx.fillStyle = obs.color || '#8B5A2B';
-                    ctx.fillRect(sx, sy, obs.w, obs.h);
-                    ctx.strokeStyle = '#000';
-                    ctx.strokeRect(sx, sy, obs.w, obs.h);
-                });
-
-                // Vẽ xe AI (dạng pixel đơn giản)
-                aiCars.forEach(ai => {
-                    const sx = toScreenX(ai.x - ai.width/2);
-                    const sy = toScreenY(ai.y - ai.height/2);
-                    // Vẽ từng pixel
-                    for (let row = 0; row < ai.height; row++) {
-                        for (let col = 0; col < ai.width; col++) {
-                            const color = ai.shape[row][col];
-                            ctx.fillStyle = color;
-                            ctx.fillRect(sx + col, sy + row, 1, 1);
-                        }
-                    }
-                });
-
-                // Vẽ xe player (pixel)
-                const psx = toScreenX(player.x - player.width/2);
-                const psy = toScreenY(player.y - player.height/2);
-                for (let row = 0; row < player.height; row++) {
-                    for (let col = 0; col < player.width; col++) {
-                        const color = player.shape[row][col];
-                        ctx.fillStyle = color;
-                        ctx.fillRect(psx + col, psy + row, 1, 1);
-                    }
+                ctx.fillStyle = '#6b4e3a';
+                for (let obs of obstacles) {
+                    ctx.fillRect(obs.x - obs.w/2 - camX, obs.y - obs.h/2 - camY, obs.w, obs.h);
                 }
-
-                // Vẽ particles
-                particles.forEach(p => {
-                    const sx = toScreenX(p.x);
-                    const sy = toScreenY(p.y);
-                    ctx.globalAlpha = p.life;
-                    ctx.fillStyle = p.color;
-                    ctx.fillRect(sx - p.size/2, sy - p.size/2, p.size, p.size);
-                });
-                ctx.globalAlpha = 1.0;
+                
+                // Vẽ xe AI
+                for (let ai of aiCars) {
+                    ai.draw(ctx, -camX, -camY);
+                }
+                
+                // Vẽ xe player
+                player.draw(ctx, -camX, -camY);
             }
 
             // ---------- CẬP NHẬT UI ----------
             function updateUI() {
                 document.getElementById('score').innerText = Math.floor(score);
                 document.getElementById('crashes').innerText = totalCrashes;
-                const speedKmh = Math.floor(Math.hypot(player.vx, player.vy) * 20);
-                document.getElementById('speed').innerText = speedKmh;
-                document.getElementById('engine').innerText = Math.floor(player.engineHealth) + '%';
+                const speed = Math.hypot(player.points[0].vx, player.points[0].vy) * 10;
+                document.getElementById('speed').innerText = Math.floor(speed);
+                
+                document.getElementById('engine-health').style.width = player.damage.engine + '%';
+                document.getElementById('doorL-health').style.width = player.damage.doorL + '%';
+                document.getElementById('doorR-health').style.width = player.damage.doorR + '%';
+                document.getElementById('wheelL-health').style.width = player.damage.wheelL + '%';
+                document.getElementById('wheelR-health').style.width = player.damage.wheelR + '%';
             }
 
             // ---------- GAME LOOP ----------
@@ -613,23 +682,38 @@ game_html = """
                 
                 const dt = Math.min(0.05, (now - lastTime) / 1000);
                 lastTime = now;
-
-                updatePlayer();
-                updateAI();
-                checkCollisions();
-                updateParticles();
+                
+                // Điều khiển
+                const force = 0.5;
+                if (keys.up) player.applyControlForce(0, force);
+                if (keys.down) player.applyControlForce(1, force * 0.6);
+                if (keys.left) player.applyControlForce(2, force * 2);
+                if (keys.right) player.applyControlForce(3, force * 2);
+                if (keys.space) player.handbrake();
+                
+                // Cập nhật vật lý
+                player.update(dt);
+                for (let ai of aiCars) {
+                    ai.update(dt);
+                }
+                
+                // Va chạm
+                handleCollisions();
+                
+                // Camera
                 updateCamera();
                 
+                // Vẽ
                 draw();
                 updateUI();
-
-                // Kiểm tra game over (động cơ hết máu)
-                if (player.engineHealth <= 0) {
+                
+                // Game over khi động cơ hết máu
+                if (player.damage.engine <= 0) {
                     gameRunning = false;
                     alert('💥 GAME OVER! Điểm: ' + Math.floor(score));
                     location.reload();
                 }
-
+                
                 requestAnimationFrame(gameLoop);
             }
 
@@ -641,4 +725,4 @@ game_html = """
 </html>
 """
 
-st.components.v1.html(game_html, height=1000, scrolling=False)
+st.components.v1.html(GAME_HTML, height=1000, scrolling=False)
