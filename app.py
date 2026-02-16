@@ -2,6 +2,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Soft‑Body Pixel Car Crash", layout="wide", initial_sidebar_state="collapsed")
 
+# Ẩn giao diện Streamlit
 st.markdown("""
 <style>
     #MainMenu, footer, header {display: none;}
@@ -10,14 +11,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Toàn bộ mã game (JavaScript + HTML) được nhúng dưới đây
+# Toàn bộ game HTML (đã bao gồm JavaScript cải tiến)
 GAME_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Soft‑Body Pixel Crash</title>
+    <title>Soft‑Body Pixel Car Crash</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-tap-highlight-color: transparent; }
         body { background: black; overflow: hidden; touch-action: none; }
@@ -152,68 +153,66 @@ GAME_HTML = """
                 camera: { x: 0, y: 0 }
             };
 
-            // ==================== SOFT‑BODY XE ====================
-            // Xe được định nghĩa bởi 20 điểm (vertices) và các lò xo (springs)
+            // ==================== SOFT‑BODY XE (CẢI TIẾN) ====================
             class SoftCar {
                 constructor(x, y, color) {
-                    this.x = x;
-                    this.y = y;
+                    this.x = x; this.y = y;
                     this.color = color;
                     this.points = [];
                     this.springs = [];
-                    this.angle = 0; // không dùng trực tiếp, do soft-body tự biến dạng
                     
-                    // Khởi tạo các điểm – hình chữ nhật bo tròn (12 điểm ngoài + 8 điểm trong)
                     // Tạo lưới 5x4 điểm
-                    const cols = 5;
-                    const rows = 4;
-                    const w = 60; // chiều rộng
-                    const h = 40; // chiều cao
+                    const cols = 5, rows = 4;
+                    const w = 60, h = 40;
                     for (let row = 0; row < rows; row++) {
                         for (let col = 0; col < cols; col++) {
-                            const px = (col / (cols-1) - 0.5) * w;
-                            const py = (row / (rows-1) - 0.5) * h;
                             this.points.push({
-                                x: px, y: py,
+                                x: (col / (cols-1) - 0.5) * w,
+                                y: (row / (rows-1) - 0.5) * h,
+                                px: 0, py: 0, // vị trí cũ cho Verlet
                                 vx: 0, vy: 0,
                                 mass: 1,
-                                pinned: false
                             });
                         }
                     }
                     
-                    // Tạo lò xo giữa các điểm kề nhau (theo hàng và cột)
+                    // Khởi tạo vị trí cũ bằng vị trí hiện tại
+                    for (let p of this.points) {
+                        p.px = p.x;
+                        p.py = p.y;
+                    }
+                    
+                    // Tạo lò xo với độ cứng cao và damping
+                    const strength = 1.5;  // tăng độ cứng để giữ hình dạng
+                    const damping = 0.3;
+                    
+                    // Lò xo dọc và ngang
                     for (let row = 0; row < rows; row++) {
                         for (let col = 0; col < cols; col++) {
                             const idx = row * cols + col;
-                            // hàng ngang
                             if (col < cols-1) {
                                 const idx2 = row * cols + (col+1);
-                                this.addSpring(idx, idx2);
+                                this.addSpring(idx, idx2, strength, damping);
                             }
-                            // hàng dọc
                             if (row < rows-1) {
                                 const idx2 = (row+1) * cols + col;
-                                this.addSpring(idx, idx2);
-                            }
-                            // đường chéo (tùy chọn, tăng độ cứng)
-                            if (col < cols-1 && row < rows-1) {
-                                const idx2 = (row+1) * cols + (col+1);
-                                this.addSpring(idx, idx2, 0.5); // độ cứng thấp hơn
-                            }
-                            if (col > 0 && row < rows-1) {
-                                const idx2 = (row+1) * cols + (col-1);
-                                this.addSpring(idx, idx2, 0.5);
+                                this.addSpring(idx, idx2, strength, damping);
                             }
                         }
                     }
+                    // Lò xo chéo (tăng độ cứng tổng thể)
+                    for (let row = 0; row < rows-1; row++) {
+                        for (let col = 0; col < cols-1; col++) {
+                            const idx = row * cols + col;
+                            const idx2 = (row+1) * cols + (col+1);
+                            this.addSpring(idx, idx2, strength*0.7, damping);
+                        }
+                    }
                     
-                    // Đánh dấu các bánh xe (các góc) để xác định hư hỏng sau
+                    // Đánh dấu bánh xe (các góc)
                     this.wheelIndices = [0, cols-1, (rows-1)*cols, rows*cols-1];
-                    this.doorIndices = [1, 2, cols+1, cols*2+1]; // ví dụ
-                    this.engineIndices = [cols*2+2, cols*2+3]; // tạm
                     
-                    // Lưu trạng thái hư hỏng
+                    // Trạng thái hư hỏng
                     this.damage = {
                         engine: 100,
                         doorL: 100,
@@ -222,25 +221,35 @@ GAME_HTML = """
                         wheelR: 100
                     };
                     
-                    // Smoker
-                    this.smokeParticles = [];
+                    // Khói
+                    this.smoke = [];
                 }
                 
-                addSpring(i, j, strength = 1.0) {
+                addSpring(i, j, strength, damping) {
                     const p1 = this.points[i];
                     const p2 = this.points[j];
                     const dx = p1.x - p2.x;
                     const dy = p1.y - p2.y;
                     const restLength = Math.hypot(dx, dy);
-                    this.springs.push({
-                        i, j,
-                        restLength,
-                        strength: 0.3 * strength, // độ cứng
-                        damping: 0.1
-                    });
+                    this.springs.push({ i, j, restLength, strength, damping });
                 }
                 
-                // Áp dụng vật lý lò xo
+                // Verlet integration
+                verlet(dt) {
+                    for (let p of this.points) {
+                        const vx = p.x - p.px;
+                        const vy = p.y - p.py;
+                        p.px = p.x;
+                        p.py = p.y;
+                        p.x += vx + p.vx * dt;
+                        p.y += vy + p.vy * dt;
+                        // reset lực
+                        p.vx = 0;
+                        p.vy = 0;
+                    }
+                }
+                
+                // Tính lực lò xo
                 applySpringForces() {
                     for (let s of this.springs) {
                         const p1 = this.points[s.i];
@@ -253,64 +262,36 @@ GAME_HTML = """
                         const nx = dx / dist;
                         const ny = dy / dist;
                         
-                        // Lực tác dụng lên hai điểm
-                        const fx = nx * force;
-                        const fy = ny * force;
-                        if (!p1.pinned) {
-                            p1.vx += fx * 0.5;
-                            p1.vy += fy * 0.5;
-                        }
-                        if (!p2.pinned) {
-                            p2.vx -= fx * 0.5;
-                            p2.vy -= fy * 0.5;
-                        }
+                        // Lực tác dụng lên vận tốc (Verlet sẽ dùng để cập nhật vị trí)
+                        p1.vx += nx * force * 0.5;
+                        p1.vy += ny * force * 0.5;
+                        p2.vx -= nx * force * 0.5;
+                        p2.vy -= ny * force * 0.5;
                         
-                        // Giảm chấn (damping)
+                        // Damping (lực cản nhớt)
                         const vdx = p2.vx - p1.vx;
                         const vdy = p2.vy - p1.vy;
-                        const damping = s.damping;
-                        if (!p1.pinned) {
-                            p1.vx += vdx * damping;
-                            p1.vy += vdy * damping;
-                        }
-                        if (!p2.pinned) {
-                            p2.vx -= vdx * damping;
-                            p2.vy -= vdy * damping;
-                        }
+                        p1.vx += vdx * s.damping;
+                        p1.vy += vdy * s.damping;
+                        p2.vx -= vdx * s.damping;
+                        p2.vy -= vdy * s.damping;
                     }
                 }
                 
-                // Cập nhật vị trí các điểm
+                // Cập nhật tổng thể
                 update(dt) {
-                    // Lực lò xo
                     this.applySpringForces();
+                    this.verlet(dt);
                     
-                    // Trọng lực (có thể bỏ qua)
-                    // for (let p of this.points) {
-                    //     p.vy += 0.05;
-                    // }
-                    
-                    // Ma sát không khí
+                    // Giới hạn trong thế giới (phản xạ)
                     for (let p of this.points) {
-                        p.vx *= 0.99;
-                        p.vy *= 0.99;
+                        if (p.x < 0) { p.x = 0; p.px = p.x + (p.x - p.px)*0.5; }
+                        if (p.x > world.width) { p.x = world.width; p.px = p.x + (p.x - p.px)*0.5; }
+                        if (p.y < 0) { p.y = 0; p.py = p.y + (p.y - p.py)*0.5; }
+                        if (p.y > world.height) { p.y = world.height; p.py = p.y + (p.y - p.py)*0.5; }
                     }
                     
-                    // Di chuyển
-                    for (let p of this.points) {
-                        p.x += p.vx;
-                        p.y += p.vy;
-                    }
-                    
-                    // Giới hạn trong thế giới (để không bay ra ngoài)
-                    for (let p of this.points) {
-                        if (p.x < 0) { p.x = 0; p.vx *= -0.3; }
-                        if (p.x > world.width) { p.x = world.width; p.vx *= -0.3; }
-                        if (p.y < 0) { p.y = 0; p.vy *= -0.3; }
-                        if (p.y > world.height) { p.y = world.height; p.vy *= -0.3; }
-                    }
-                    
-                    // Cập nhật vị trí tổng thể (lấy trung bình)
+                    // Tính tâm xe (để camera)
                     this.x = 0; this.y = 0;
                     for (let p of this.points) {
                         this.x += p.x;
@@ -319,8 +300,8 @@ GAME_HTML = """
                     this.x /= this.points.length;
                     this.y /= this.points.length;
                     
-                    // Cập nhật damage dựa trên độ biến dạng của lò xo
-                    let engineStress = 0, doorLStress = 0, doorRStress = 0, wheelLStress = 0, wheelRStress = 0;
+                    // Tính hư hỏng dựa trên độ biến dạng của các lò xo (đơn giản)
+                    let engineStress = 0;
                     for (let s of this.springs) {
                         const p1 = this.points[s.i];
                         const p2 = this.points[s.j];
@@ -328,37 +309,26 @@ GAME_HTML = """
                         const dy = p2.y - p1.y;
                         const dist = Math.hypot(dx, dy);
                         const stretch = Math.abs(dist - s.restLength) / s.restLength;
-                        // Nếu lò xo thuộc vùng nào đó thì tăng stress
-                        if (this.engineIndices.includes(s.i) || this.engineIndices.includes(s.j)) {
-                            engineStress += stretch;
-                        }
-                        if (this.doorIndices.includes(s.i) || this.doorIndices.includes(s.j)) {
-                            doorLStress += stretch; // phân biệt trái/phải cần logic phức tạp hơn
-                        }
-                        if (this.wheelIndices.includes(s.i) || this.wheelIndices.includes(s.j)) {
-                            wheelLStress += stretch;
-                        }
+                        engineStress += stretch;
                     }
-                    // Giảm máu
-                    this.damage.engine = Math.max(0, this.damage.engine - engineStress * 0.1);
-                    this.damage.doorL = Math.max(0, this.damage.doorL - doorLStress * 0.05);
-                    this.damage.doorR = Math.max(0, this.damage.doorR - doorLStress * 0.05);
-                    this.damage.wheelL = Math.max(0, this.damage.wheelL - wheelLStress * 0.2);
-                    this.damage.wheelR = Math.max(0, this.damage.wheelR - wheelLStress * 0.2);
+                    engineStress /= this.springs.length;
+                    
+                    // Giảm máu động cơ nhẹ nhàng
+                    this.damage.engine = Math.max(0, this.damage.engine - engineStress * 0.5);
                     
                     // Tạo khói nếu động cơ yếu
                     if (this.damage.engine < 40 && Math.random() < 0.1) {
-                        this.smokeParticles.push({
-                            x: this.x + (Math.random()-0.5)*20,
-                            y: this.y + (Math.random()-0.5)*20,
-                            vx: (Math.random()-0.5)*1,
-                            vy: -Math.random()*2,
+                        this.smoke.push({
+                            x: this.x + (Math.random()-0.5)*30,
+                            y: this.y + (Math.random()-0.5)*30,
+                            vx: (Math.random()-0.5)*0.5,
+                            vy: -Math.random()*1,
                             life: 1.0,
-                            size: 5+Math.random()*10
+                            size: 5+Math.random()*8
                         });
                     }
                     // Lọc khói
-                    this.smokeParticles = this.smokeParticles.filter(p => {
+                    this.smoke = this.smoke.filter(p => {
                         p.x += p.vx;
                         p.y += p.vy;
                         p.life -= 0.01;
@@ -366,95 +336,61 @@ GAME_HTML = """
                     });
                 }
                 
-                // Vẽ xe (dùng các điểm để tạo đa giác)
-                draw(ctx, offsetX, offsetY) {
-                    // Vẽ các mặt (tô màu)
-                    ctx.fillStyle = this.color;
-                    ctx.strokeStyle = '#000';
-                    ctx.lineWidth = 2;
-                    
-                    // Sắp xếp các điểm theo thứ tự bao quanh (đơn giản: vẽ từng tam giác từ điểm đầu)
-                    // Thực tế nên dùng delaunay, nhưng ở đây ta vẽ các ô lưới
-                    const cols = 5;
-                    const rows = 4;
-                    for (let row = 0; row < rows-1; row++) {
-                        for (let col = 0; col < cols-1; col++) {
-                            const i0 = row * cols + col;
-                            const i1 = row * cols + (col+1);
-                            const i2 = (row+1) * cols + col;
-                            const i3 = (row+1) * cols + (col+1);
-                            
-                            const p0 = this.points[i0];
-                            const p1 = this.points[i1];
-                            const p2 = this.points[i2];
-                            const p3 = this.points[i3];
-                            
-                            // Vẽ hai tam giác
-                            ctx.beginPath();
-                            ctx.moveTo(offsetX + p0.x, offsetY + p0.y);
-                            ctx.lineTo(offsetX + p1.x, offsetY + p1.y);
-                            ctx.lineTo(offsetX + p2.x, offsetY + p2.y);
-                            ctx.closePath();
-                            ctx.fill();
-                            ctx.stroke();
-                            
-                            ctx.beginPath();
-                            ctx.moveTo(offsetX + p1.x, offsetY + p1.y);
-                            ctx.lineTo(offsetX + p3.x, offsetY + p3.y);
-                            ctx.lineTo(offsetX + p2.x, offsetY + p2.y);
-                            ctx.closePath();
-                            ctx.fill();
-                            ctx.stroke();
-                        }
+                // Vẽ bằng pixel (mỗi điểm là một pixel vuông)
+                draw(ctx, offX, offY) {
+                    const cellSize = 3; // kích thước mỗi pixel (phóng to để dễ thấy)
+                    for (let p of this.points) {
+                        ctx.fillStyle = this.color;
+                        ctx.fillRect(offX + p.x - cellSize/2, offY + p.y - cellSize/2, cellSize, cellSize);
                     }
-                    
-                    // Vẽ bánh xe (các điểm góc)
+                    // Vẽ bánh xe (các góc)
                     ctx.fillStyle = '#222';
                     for (let idx of this.wheelIndices) {
                         const p = this.points[idx];
                         ctx.beginPath();
-                        ctx.arc(offsetX + p.x, offsetY + p.y, 6, 0, 2*Math.PI);
+                        ctx.arc(offX + p.x, offY + p.y, 4, 0, 2*Math.PI);
                         ctx.fill();
                     }
-                    
                     // Vẽ khói
                     ctx.globalAlpha = 0.5;
-                    for (let p of this.smokeParticles) {
+                    for (let p of this.smoke) {
                         ctx.fillStyle = '#888';
                         ctx.beginPath();
-                        ctx.arc(offsetX + p.x, offsetY + p.y, p.size * p.life, 0, 2*Math.PI);
+                        ctx.arc(offX + p.x, offY + p.y, p.size * p.life, 0, 2*Math.PI);
                         ctx.fill();
                     }
                     ctx.globalAlpha = 1.0;
                 }
                 
-                // Tác động lực điều khiển (ví dụ đẩy các điểm phía sau)
-                applyControlForce(direction, strength) {
-                    // direction: 0 = lên (tiến), 1 = xuống (lùi), 2 = trái, 3 = phải
-                    // Chọn các điểm phía sau (theo chiều dọc)
-                    const cols = 5;
-                    const rows = 4;
-                    for (let col = 1; col < cols-1; col++) {
-                        const idx = (rows-1) * cols + col; // hàng cuối
-                        const p = this.points[idx];
-                        if (direction === 0) { // tiến
-                            p.vy -= strength;
-                        } else if (direction === 1) { // lùi
-                            p.vy += strength;
+                // Điều khiển: tác động lực lên các điểm phía sau
+                applyControl(direction, strength) {
+                    const cols = 5, rows = 4;
+                    // direction: 0=tiến, 1=lùi, 2=trái, 3=phải
+                    if (direction === 0) { // tiến
+                        for (let col = 1; col < cols-1; col++) {
+                            const idx = (rows-1) * cols + col; // hàng sau
+                            const p = this.points[idx];
+                            p.vx += Math.sin(this.angle) * strength;
+                            p.vy += Math.cos(this.angle) * strength;
                         }
-                    }
-                    // Lái: tác động lệch bên
-                    if (direction === 2) { // trái
+                    } else if (direction === 1) { // lùi
+                        for (let col = 1; col < cols-1; col++) {
+                            const idx = (rows-1) * cols + col;
+                            const p = this.points[idx];
+                            p.vx -= Math.sin(this.angle) * strength * 0.6;
+                            p.vy -= Math.cos(this.angle) * strength * 0.6;
+                        }
+                    } else if (direction === 2) { // trái
                         for (let row = 0; row < rows; row++) {
                             const idx = row * cols; // cột trái
                             const p = this.points[idx];
-                            p.vx -= strength * 0.5;
+                            p.vx -= strength * 2;
                         }
                     } else if (direction === 3) { // phải
                         for (let row = 0; row < rows; row++) {
                             const idx = row * cols + (cols-1); // cột phải
                             const p = this.points[idx];
-                            p.vx += strength * 0.5;
+                            p.vx += strength * 2;
                         }
                     }
                 }
@@ -463,18 +399,20 @@ GAME_HTML = """
                 handbrake() {
                     for (let idx of this.wheelIndices) {
                         const p = this.points[idx];
-                        p.vx *= 0.8;
-                        p.vy *= 0.8;
+                        p.vx *= 0.7;
+                        p.vy *= 0.7;
                     }
                 }
             }
 
             // Tạo xe người chơi
             const player = new SoftCar(1500, 1500, '#2277cc');
+            // Góc quay ban đầu (tính từ vận tốc, nhưng soft-body không có góc cố định)
+            player.angle = 0; // thêm thuộc tính để điều khiển
             
-            // Tạo xe AI (đơn giản hóa, không dùng soft-body cho AI để tăng hiệu suất)
+            // Tạo xe AI (cũng dùng soft-body nhưng số lượng ít để giữ hiệu suất)
             const aiCars = [];
-            for (let i = 0; i < 4; i++) {
+            for (let i = 0; i < 3; i++) {
                 aiCars.push(new SoftCar(1000+Math.random()*1000, 1000+Math.random()*1000, '#cc4444'));
             }
 
@@ -485,19 +423,21 @@ GAME_HTML = """
             obstacles.push({ x: world.width/2, y: world.height+25, w: world.width, h: 50 });
             obstacles.push({ x: -25, y: world.height/2, w: 50, h: world.height });
             obstacles.push({ x: world.width+25, y: world.height/2, w: 50, h: world.height });
-            // Cây cối
+            // Cây cối, nhà
             for (let i = 0; i < 20; i++) {
                 obstacles.push({
                     x: 200+Math.random()*2600,
                     y: 200+Math.random()*2600,
                     w: 30+Math.random()*30,
-                    h: 30+Math.random()*30
+                    h: 30+Math.random()*30,
+                    color: `rgb(${30+Math.random()*50},${50+Math.random()*50},${20})`
                 });
             }
 
             // ---------- ĐIỀU KHIỂN ----------
             const keys = { up: false, down: false, left: false, right: false, space: false };
             
+            // PC keyboard
             window.addEventListener('keydown', (e) => {
                 const k = e.key;
                 if (k === 'w' || k === 'W' || k === 'ArrowUp') { keys.up = true; e.preventDefault(); }
@@ -530,6 +470,7 @@ GAME_HTML = """
                     e.preventDefault();
                     keys[key] = false;
                 });
+                // Mouse events for testing on PC
                 btn.addEventListener('mousedown', (e) => { e.preventDefault(); keys[key] = true; });
                 btn.addEventListener('mouseup', (e) => { e.preventDefault(); keys[key] = false; });
                 btn.addEventListener('mouseleave', (e) => { keys[key] = false; });
@@ -540,30 +481,39 @@ GAME_HTML = """
             let totalCrashes = 0;
             let gameRunning = true;
 
-            // ---------- HÀM VA CHẠM (đơn giản) ----------
+            // ---------- VA CHẠM (CHỈ TÍNH KHI VẬN TỐC ĐỦ LỚN) ----------
             function handleCollisions() {
-                // Player vs AI cars (va chạm điểm - điểm)
+                const threshold = 1.5; // ngưỡng vận tốc tương đối để tính va chạm
+                
+                // Player vs AI cars
                 for (let ai of aiCars) {
                     for (let pi of player.points) {
                         for (let pj of ai.points) {
                             const dx = pi.x - pj.x;
                             const dy = pi.y - pj.y;
                             const dist = Math.hypot(dx, dy);
-                            if (dist < 10) { // ngưỡng va chạm
-                                // Tạo phản lực
-                                const force = 0.5;
-                                const nx = dx / (dist || 1);
-                                const ny = dy / (dist || 1);
-                                pi.vx += nx * force;
-                                pi.vy += ny * force;
-                                pj.vx -= nx * force;
-                                pj.vy -= ny * force;
+                            if (dist < 10) { // khoảng cách va chạm
+                                // Tính vận tốc tương đối
+                                const vRelX = pi.vx - pj.vx;
+                                const vRelY = pi.vy - pj.vy;
+                                const vRel = Math.hypot(vRelX, vRelY);
                                 
-                                totalCrashes++;
-                                score += Math.floor(Math.hypot(pi.vx, pi.vy) * 5);
-                                
-                                // Làm hỏng xe (dựa trên vị trí va chạm)
-                                // ... (có thể thêm)
+                                if (vRel > threshold) {
+                                    // Tạo phản lực
+                                    const nx = dx / (dist || 1);
+                                    const ny = dy / (dist || 1);
+                                    const force = vRel * 0.8;
+                                    pi.vx += nx * force;
+                                    pi.vy += ny * force;
+                                    pj.vx -= nx * force;
+                                    pj.vy -= ny * force;
+                                    
+                                    totalCrashes++;
+                                    score += Math.floor(vRel * 10);
+                                    
+                                    // Làm hỏng động cơ (tạm thời)
+                                    player.damage.engine = Math.max(0, player.damage.engine - vRel * 2);
+                                }
                             }
                         }
                     }
@@ -574,41 +524,61 @@ GAME_HTML = """
                     for (let p of player.points) {
                         if (p.x > obs.x - obs.w/2 && p.x < obs.x + obs.w/2 &&
                             p.y > obs.y - obs.h/2 && p.y < obs.y + obs.h/2) {
-                            // Đẩy điểm ra khỏi vật cản
-                            const left = p.x - (obs.x - obs.w/2);
-                            const right = (obs.x + obs.w/2) - p.x;
-                            const top = p.y - (obs.y - obs.h/2);
-                            const bottom = (obs.y + obs.h/2) - p.y;
                             
-                            const minX = Math.min(left, right);
-                            const minY = Math.min(top, bottom);
-                            
-                            if (minX < minY) {
-                                if (left < right) {
-                                    p.x = obs.x - obs.w/2 - 1;
-                                    p.vx = -Math.abs(p.vx) * 0.3;
+                            const speed = Math.hypot(p.vx, p.vy);
+                            if (speed > threshold) {
+                                // Đẩy điểm ra khỏi vật cản
+                                const left = p.x - (obs.x - obs.w/2);
+                                const right = (obs.x + obs.w/2) - p.x;
+                                const top = p.y - (obs.y - obs.h/2);
+                                const bottom = (obs.y + obs.h/2) - p.y;
+                                
+                                const minX = Math.min(left, right);
+                                const minY = Math.min(top, bottom);
+                                
+                                if (minX < minY) {
+                                    if (left < right) {
+                                        p.x = obs.x - obs.w/2 - 2;
+                                        p.vx = -Math.abs(p.vx) * 0.3;
+                                    } else {
+                                        p.x = obs.x + obs.w/2 + 2;
+                                        p.vx = Math.abs(p.vx) * 0.3;
+                                    }
                                 } else {
-                                    p.x = obs.x + obs.w/2 + 1;
-                                    p.vx = Math.abs(p.vx) * 0.3;
+                                    if (top < bottom) {
+                                        p.y = obs.y - obs.h/2 - 2;
+                                        p.vy = -Math.abs(p.vy) * 0.3;
+                                    } else {
+                                        p.y = obs.y + obs.h/2 + 2;
+                                        p.vy = Math.abs(p.vy) * 0.3;
+                                    }
                                 }
-                            } else {
-                                if (top < bottom) {
-                                    p.y = obs.y - obs.h/2 - 1;
-                                    p.vy = -Math.abs(p.vy) * 0.3;
-                                } else {
-                                    p.y = obs.y + obs.h/2 + 1;
-                                    p.vy = Math.abs(p.vy) * 0.3;
-                                }
+                                
+                                totalCrashes++;
+                                score += Math.floor(speed * 5);
+                                player.damage.engine = Math.max(0, player.damage.engine - speed * 1.5);
                             }
-                            
-                            totalCrashes++;
-                            score += Math.floor(Math.hypot(p.vx, p.vy) * 2);
                         }
                     }
                 }
             }
 
-            // ---------- CAMERA ----------
+            // ---------- CẬP NHẬT GÓC XE (cho điều khiển) ----------
+            function updatePlayerAngle() {
+                // Tính góc từ vận tốc trung bình của các điểm
+                let avgVx = 0, avgVy = 0;
+                for (let p of player.points) {
+                    avgVx += p.vx;
+                    avgVy += p.vy;
+                }
+                avgVx /= player.points.length;
+                avgVy /= player.points.length;
+                if (Math.hypot(avgVx, avgVy) > 0.1) {
+                    player.angle = Math.atan2(avgVx, avgVy);
+                }
+            }
+
+            // ---------- CAMERA FOLLOW ----------
             function updateCamera() {
                 world.camera.x = player.x - canvas.width/2;
                 world.camera.y = player.y - canvas.height/2;
@@ -620,8 +590,8 @@ GAME_HTML = """
             function draw() {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 
-                const camX = world.camera.x;
-                const camY = world.camera.y;
+                const offX = -world.camera.x;
+                const offY = -world.camera.y;
                 
                 // Nền
                 ctx.fillStyle = '#1a2c2c';
@@ -631,42 +601,45 @@ GAME_HTML = """
                 ctx.strokeStyle = '#3a5a5a';
                 ctx.lineWidth = 1;
                 const grid = 100;
-                const startX = Math.floor(camX / grid) * grid;
-                const startY = Math.floor(camY / grid) * grid;
-                for (let x = startX; x < camX + canvas.width; x += grid) {
+                const startX = Math.floor(world.camera.x / grid) * grid;
+                const startY = Math.floor(world.camera.y / grid) * grid;
+                for (let x = startX; x < world.camera.x + canvas.width; x += grid) {
                     ctx.beginPath();
-                    ctx.moveTo(x - camX, 0);
-                    ctx.lineTo(x - camX, canvas.height);
+                    ctx.moveTo(x - world.camera.x, 0);
+                    ctx.lineTo(x - world.camera.x, canvas.height);
                     ctx.stroke();
                 }
-                for (let y = startY; y < camY + canvas.height; y += grid) {
+                for (let y = startY; y < world.camera.y + canvas.height; y += grid) {
                     ctx.beginPath();
-                    ctx.moveTo(0, y - camY);
-                    ctx.lineTo(canvas.width, y - camY);
+                    ctx.moveTo(0, y - world.camera.y);
+                    ctx.lineTo(canvas.width, y - world.camera.y);
                     ctx.stroke();
                 }
                 
                 // Vẽ vật cản
-                ctx.fillStyle = '#6b4e3a';
                 for (let obs of obstacles) {
-                    ctx.fillRect(obs.x - obs.w/2 - camX, obs.y - obs.h/2 - camY, obs.w, obs.h);
+                    ctx.fillStyle = obs.color || '#6b4e3a';
+                    ctx.fillRect(obs.x - obs.w/2 - world.camera.x, obs.y - obs.h/2 - world.camera.y, obs.w, obs.h);
                 }
                 
                 // Vẽ xe AI
                 for (let ai of aiCars) {
-                    ai.draw(ctx, -camX, -camY);
+                    ai.draw(ctx, offX, offY);
                 }
                 
                 // Vẽ xe player
-                player.draw(ctx, -camX, -camY);
+                player.draw(ctx, offX, offY);
             }
 
             // ---------- CẬP NHẬT UI ----------
             function updateUI() {
                 document.getElementById('score').innerText = Math.floor(score);
                 document.getElementById('crashes').innerText = totalCrashes;
-                const speed = Math.hypot(player.points[0].vx, player.points[0].vy) * 10;
-                document.getElementById('speed').innerText = Math.floor(speed);
+                // Tính tốc độ trung bình
+                let sp = 0;
+                for (let p of player.points) sp += Math.hypot(p.vx, p.vy);
+                sp = (sp / player.points.length) * 20;
+                document.getElementById('speed').innerText = Math.floor(sp);
                 
                 document.getElementById('engine-health').style.width = player.damage.engine + '%';
                 document.getElementById('doorL-health').style.width = player.damage.doorL + '%';
@@ -683,17 +656,26 @@ GAME_HTML = """
                 const dt = Math.min(0.05, (now - lastTime) / 1000);
                 lastTime = now;
                 
-                // Điều khiển
-                const force = 0.5;
-                if (keys.up) player.applyControlForce(0, force);
-                if (keys.down) player.applyControlForce(1, force * 0.6);
-                if (keys.left) player.applyControlForce(2, force * 2);
-                if (keys.right) player.applyControlForce(3, force * 2);
+                // Điều khiển (tác động lực lên các điểm)
+                const force = 0.8;
+                if (keys.up) player.applyControl(0, force);
+                if (keys.down) player.applyControl(1, force);
+                if (keys.left) player.applyControl(2, force);
+                if (keys.right) player.applyControl(3, force);
                 if (keys.space) player.handbrake();
                 
-                // Cập nhật vật lý
+                // Cập nhật góc xe để điều khiển hướng
+                updatePlayerAngle();
+                
+                // Cập nhật vật lý cho player
                 player.update(dt);
+                
+                // Cập nhật vật lý cho AI (đơn giản)
                 for (let ai of aiCars) {
+                    // AI di chuyển ngẫu nhiên nhẹ
+                    if (Math.random() < 0.01) {
+                        ai.applyControl(Math.floor(Math.random()*2), 0.5);
+                    }
                     ai.update(dt);
                 }
                 
@@ -707,7 +689,7 @@ GAME_HTML = """
                 draw();
                 updateUI();
                 
-                // Game over khi động cơ hết máu
+                // Game over
                 if (player.damage.engine <= 0) {
                     gameRunning = false;
                     alert('💥 GAME OVER! Điểm: ' + Math.floor(score));
