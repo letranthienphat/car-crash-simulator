@@ -1,110 +1,107 @@
 import streamlit as st
 
-st.set_page_config(page_title="Voxel City Crash Simulator", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Voxel BeamNG Web", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
 #MainMenu, footer, header {display:none;}
-.stApp {background:black; padding:0;}
-.block-container {padding:0 !important; max-width:100% !important;}
+.stApp {background:black;padding:0;}
+.block-container {padding:0!important;max-width:100%!important;}
 </style>
 """, unsafe_allow_html=True)
 
-GAME_HTML = """
+GAME = """
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Voxel City Crash Simulator</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>Voxel Crash City</title>
 <style>
 body{margin:0;overflow:hidden;background:black;}
 canvas{width:100vw;height:100vh;image-rendering:pixelated;}
-#ui{
-position:absolute;top:10px;left:10px;
-color:#00ffff;font-family:monospace;
-background:rgba(0,0,0,0.6);
-padding:10px;border:2px solid cyan;border-radius:10px;
-}
+#hud{position:absolute;top:10px;left:10px;color:#0ff;font-family:monospace;background:rgba(0,0,0,.6);padding:10px;border:2px solid cyan;}
 </style>
 </head>
 <body>
-
-<div id="ui">SPEED: <span id="spd">0</span> | CRASH: <span id="cr">0</span></div>
+<div id="hud">SPD:<span id="spd">0</span> | CRASH:<span id="cr">0</span></div>
 <canvas id="c"></canvas>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-const canvas = document.getElementById("c");
-const renderer = new THREE.WebGLRenderer({canvas, antialias:false});
-renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x050015);
+// ===== BASIC ENGINE =====
+const c=document.getElementById("c");
+const r=new THREE.WebGLRenderer({canvas:c,antialias:false});
+r.setSize(innerWidth,innerHeight);
+r.setPixelRatio(Math.min(devicePixelRatio,2));
 
-const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight,0.1,2000);
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x020008);
 
-// LIGHTS
-scene.add(new THREE.AmbientLight(0x404060));
-const sun = new THREE.DirectionalLight(0xffffff,1.4);
-sun.position.set(50,80,50);
+const cam=new THREE.PerspectiveCamera(65,innerWidth/innerHeight,0.1,5000);
+
+// lights
+scene.add(new THREE.AmbientLight(0x505070));
+const sun=new THREE.DirectionalLight(0xffffff,1.5);
+sun.position.set(100,200,100);
 sun.castShadow=true;
 scene.add(sun);
 
 // ===== GROUND =====
-const ground = new THREE.Mesh(
- new THREE.PlaneGeometry(1000,1000),
- new THREE.MeshStandardMaterial({color:0x0c0c12})
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(3000,3000),
+ new THREE.MeshStandardMaterial({color:0x05050c})
 );
 ground.rotation.x=-Math.PI/2;
 scene.add(ground);
 
-// ===== ROADS =====
-const roadMat = new THREE.MeshStandardMaterial({color:0x202020});
-for(let i=-400;i<=400;i+=80){
- let r1 = new THREE.Mesh(new THREE.PlaneGeometry(800,20),roadMat);
+// ===== ROAD GRID (no buildings here) =====
+const roadMat=new THREE.MeshStandardMaterial({color:0x202020});
+const ROAD_STEP=120;
+for(let i=-1200;i<=1200;i+=ROAD_STEP){
+ let r1=new THREE.Mesh(new THREE.PlaneGeometry(2400,20),roadMat);
  r1.rotation.x=-Math.PI/2;
  r1.position.z=i;
  scene.add(r1);
 
- let r2 = new THREE.Mesh(new THREE.PlaneGeometry(20,800),roadMat);
+ let r2=new THREE.Mesh(new THREE.PlaneGeometry(20,2400),roadMat);
  r2.rotation.x=-Math.PI/2;
  r2.position.x=i;
  scene.add(r2);
 }
 
-// ===== CITY BUILDINGS =====
-function building(x,z,w,h,d,c){
- let b = new THREE.Mesh(
-  new THREE.BoxGeometry(w,h,d),
-  new THREE.MeshStandardMaterial({color:c})
+// ===== CITY BLOCKS (NO ROAD ZONE BUILDING) =====
+function rand(a,b){return a+Math.random()*(b-a);}
+function building(x,z){
+ let w=rand(20,60), d=rand(20,60), h=rand(40,300);
+ let color=0x111111+Math.random()*0x444444;
+ let b=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),
+  new THREE.MeshStandardMaterial({color})
  );
  b.position.set(x,h/2,z);
  b.castShadow=true;
- b.receiveShadow=true;
  scene.add(b);
 }
-for(let i=0;i<120;i++){
- building(
-  (Math.random()-0.5)*800,
-  (Math.random()-0.5)*800,
-  10+Math.random()*30,
-  20+Math.random()*200,
-  10+Math.random()*30,
-  0x111122 + Math.random()*0x333333
- );
+
+// place buildings only between roads
+for(let x=-1100;x<=1100;x+=ROAD_STEP){
+ for(let z=-1100;z<=1100;z+=ROAD_STEP){
+  if(Math.random()<0.6){
+   let bx=x+rand(30,ROAD_STEP-30);
+   let bz=z+rand(30,ROAD_STEP-30);
+   building(bx,bz);
+  }
+ }
 }
 
-// ===== PLAYER VOXEL CAR =====
-const car = new THREE.Group();
+// ===== PLAYER CAR VOXEL (REAL SEDAN SHAPE) =====
+const car=new THREE.Group();
 scene.add(car);
 const voxels=[];
 
-function voxel(x,y,z,color){
- let m = new THREE.Mesh(
-  new THREE.BoxGeometry(1,1,1),
-  new THREE.MeshStandardMaterial({color})
+function v(x,y,z,c){
+ let m=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),
+  new THREE.MeshStandardMaterial({color:c})
  );
  m.position.set(x,y,z);
  m.castShadow=true;
@@ -114,58 +111,54 @@ function voxel(x,y,z,color){
 
 // chassis
 for(let x=-3;x<=3;x++)
-for(let z=-6;z<=6;z++)
+for(let z=-7;z<=7;z++)
 for(let y=0;y<=1;y++)
- voxel(x,y,z,0x0044ff);
+ v(x,y,z,0x0033ff);
 
 // hood slope
 for(let x=-2;x<=2;x++)
-for(let z=-6;z<=-4;z++)
- voxel(x,2,z,0x0055ff);
+for(let z=-7;z<=-4;z++)
+ v(x,2,z,0x0044ff);
 
 // cabin
 for(let x=-2;x<=2;x++)
 for(let z=-2;z<=2;z++)
 for(let y=2;y<=4;y++)
- voxel(x,y,z,0x0066ff);
+ v(x,y,z,0x0055ff);
 
 // roof
 for(let x=-1;x<=1;x++)
 for(let z=-1;z<=1;z++)
- voxel(x,5,z,0x0088ff);
+ v(x,5,z,0x0077ff);
 
 // windows
 for(let x=-2;x<=2;x++){
- voxel(x,3,3,0x88ffff);
- voxel(x,3,-3,0x88ffff);
+ v(x,3,3,0x88ffff);
+ v(x,3,-3,0x88ffff);
 }
 
 // lights
-voxel(-2,2,-7,0xffffaa);
-voxel(2,2,-7,0xffffaa);
-voxel(-2,2,7,0xff0000);
-voxel(2,2,7,0xff0000);
+v(-2,2,-8,0xffffaa); v(2,2,-8,0xffffaa);
+v(-2,2,8,0xff0000); v(2,2,8,0xff0000);
 
 // wheels
-const wheelGeo = new THREE.CylinderGeometry(0.7,0.7,1,8);
-const wheelMat = new THREE.MeshStandardMaterial({color:0x000000});
+const wg=new THREE.CylinderGeometry(0.7,0.7,1,8);
+const wm=new THREE.MeshStandardMaterial({color:0});
 const wheels=[];
-[[ -3,0,-5],[3,0,-5],[-3,0,5],[3,0,5]].forEach(p=>{
- let w=new THREE.Mesh(wheelGeo,wheelMat);
+[[-3,0,-5],[3,0,-5],[-3,0,5],[3,0,5]].forEach(p=>{
+ let w=new THREE.Mesh(wg,wm);
  w.rotation.z=Math.PI/2;
- w.position.set(p[0],p[1],p[2]);
- car.add(w);
- wheels.push(w);
+ w.position.set(...p);
+ car.add(w); wheels.push(w);
 });
 
 // ===== AI CARS =====
 const aiCars=[];
-function createAICar(x,z,color){
+function aiCar(x,z){
  let g=new THREE.Group();
- for(let i=0;i<25;i++){
-  let p=new THREE.Mesh(
-   new THREE.BoxGeometry(1,1,1),
-   new THREE.MeshStandardMaterial({color})
+ for(let i=0;i<40;i++){
+  let p=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),
+   new THREE.MeshStandardMaterial({color:0xff2222})
   );
   p.position.set((Math.random()-0.5)*4,0,(Math.random()-0.5)*8);
   g.add(p);
@@ -174,141 +167,115 @@ function createAICar(x,z,color){
  scene.add(g);
  aiCars.push({mesh:g,vx:0,vz:0});
 }
-for(let i=0;i<20;i++){
- createAICar((Math.random()-0.5)*600,(Math.random()-0.5)*600,0xff3333);
-}
-
-// ===== BREAKABLE VOXELS =====
-const broken=[];
-function breakVoxel(v,force){
- car.remove(v);
- scene.add(v);
- v.userData={
-  vx:(Math.random()-0.5)*force,
-  vy:Math.random()*force,
-  vz:(Math.random()-0.5)*force,
-  life:1
- };
- broken.push(v);
-}
+for(let i=0;i<30;i++) aiCar(rand(-1000,1000),rand(-1000,1000));
 
 // ===== PHYSICS =====
-let vx=0,vz=0,angle=0;
-let speed=0;
-let crashes=0;
-let shake=0;
-
-// input
+let vx=0,vz=0,ang=0,crash=0;
 const keys={};
-onkeydown=e=>keys[e.key]=true;
-onkeyup=e=>keys[e.key]=false;
+onkeydown=e=>keys[e.key]=1;
+onkeyup=e=>keys[e.key]=0;
 
-// ===== CAMERA SYSTEM =====
-const camTarget = new THREE.Vector3();
-function updateCamera(){
- camTarget.set(
-  car.position.x - Math.sin(angle)*25,
-  car.position.y + 12,
-  car.position.z - Math.cos(angle)*25
- );
- camera.position.lerp(camTarget,0.05);
- camera.lookAt(car.position.x,car.position.y+3,car.position.z);
-
- if(shake>0){
-  camera.position.x+=(Math.random()-0.5)*shake;
-  camera.position.y+=(Math.random()-0.5)*shake;
-  shake*=0.9;
+// ===== BREAKABLE PIXELS (CONTACT POINT) =====
+const debris=[];
+function breakAt(x,y,z,force){
+ for(let i=0;i<20;i++){
+  let p=new THREE.Mesh(new THREE.BoxGeometry(0.8,0.8,0.8),
+   new THREE.MeshStandardMaterial({color:0xffaa00})
+  );
+  p.position.set(x,y,z);
+  p.userData={
+   vx:(Math.random()-0.5)*force,
+   vy:Math.random()*force,
+   vz:(Math.random()-0.5)*force,
+   life:1
+  };
+  scene.add(p);
+  debris.push(p);
  }
+}
+
+// ===== CAMERA SPRING =====
+const camVel=new THREE.Vector3();
+function camUpdate(){
+ let target=new THREE.Vector3(
+  car.position.x-Math.sin(ang)*25,
+  car.position.y+12,
+  car.position.z-Math.cos(ang)*25
+ );
+ camVel.lerp(target.sub(cam.position),0.05);
+ cam.position.add(camVel.multiplyScalar(0.1));
+ cam.lookAt(car.position.x,car.position.y+3,car.position.z);
 }
 
 // ===== LOOP =====
 function loop(){
  requestAnimationFrame(loop);
 
- // driving
- if(keys["w"]){vx+=Math.sin(angle)*0.03; vz+=Math.cos(angle)*0.03;}
- if(keys["s"]){vx-=Math.sin(angle)*0.015; vz-=Math.cos(angle)*0.015;}
- if(keys["a"]) angle+=0.035;
- if(keys["d"]) angle-=0.035;
+ if(keys["w"]) {vx+=Math.sin(ang)*0.03; vz+=Math.cos(ang)*0.03;}
+ if(keys["s"]) {vx-=Math.sin(ang)*0.02; vz-=Math.cos(ang)*0.02;}
+ if(keys["a"]) ang+=0.04;
+ if(keys["d"]) ang-=0.04;
 
  vx*=0.98; vz*=0.98;
- speed=Math.sqrt(vx*vx+vz*vz);
+ let sp=Math.sqrt(vx*vx+vz*vz);
 
  car.position.x+=vx;
  car.position.z+=vz;
- car.rotation.y=angle;
+ car.rotation.y=ang;
+ wheels.forEach(w=>w.rotation.x-=sp);
 
- wheels.forEach(w=>w.rotation.x-=speed);
-
- // AI driving
+ // AI move
  aiCars.forEach(ai=>{
-  let dx=car.position.x-ai.mesh.position.x;
-  let dz=car.position.z-ai.mesh.position.z;
-  let d=Math.sqrt(dx*dx+dz*dz);
-
-  if(d<40){
-   ai.vx -= dx/d*0.01;
-   ai.vz -= dz/d*0.01;
-  } else {
-   ai.vx += (Math.random()-0.5)*0.002;
-   ai.vz += (Math.random()-0.5)*0.002;
-  }
-
-  let sp=Math.sqrt(ai.vx*ai.vx+ai.vz*ai.vz);
-  if(sp>0.25){ai.vx*=0.9; ai.vz*=0.9;}
-
+  ai.vx+=(Math.random()-0.5)*0.002;
+  ai.vz+=(Math.random()-0.5)*0.002;
   ai.mesh.position.x+=ai.vx;
   ai.mesh.position.z+=ai.vz;
-  ai.mesh.rotation.y=Math.atan2(ai.vx,ai.vz);
  });
 
- // collision AI
+ // collision with AI (contact point!)
  aiCars.forEach(ai=>{
-  let dx=car.position.x-ai.mesh.position.x;
-  let dz=car.position.z-ai.mesh.position.z;
+  let dx=ai.mesh.position.x-car.position.x;
+  let dz=ai.mesh.position.z-car.position.z;
   let d=Math.sqrt(dx*dx+dz*dz);
-  if(d<6 && speed>0.2){
-   crashes++;
-   shake=0.6;
-   for(let i=0;i<10;i++){
-    let v=voxels[Math.floor(Math.random()*voxels.length)];
-    if(v) breakVoxel(v,0.4);
-   }
+  if(d<6 && sp>0.2){
+   crash++;
+   let cx=car.position.x+dx*0.5;
+   let cz=car.position.z+dz*0.5;
+   breakAt(cx,2,cz,0.5);
    vx*=-0.5; vz*=-0.5;
   }
  });
 
- // broken voxel physics
- broken.forEach((v,i)=>{
-  v.userData.vy-=0.02;
-  v.position.x+=v.userData.vx;
-  v.position.y+=v.userData.vy;
-  v.position.z+=v.userData.vz;
-  v.userData.life-=0.01;
-  if(v.userData.life<=0){
-   scene.remove(v);
-   broken.splice(i,1);
+ // debris physics
+ debris.forEach((p,i)=>{
+  p.userData.vy-=0.02;
+  p.position.x+=p.userData.vx;
+  p.position.y+=p.userData.vy;
+  p.position.z+=p.userData.vz;
+  p.userData.life-=0.01;
+  if(p.userData.life<=0){
+   scene.remove(p);
+   debris.splice(i,1);
   }
  });
 
- updateCamera();
+ camUpdate();
+ document.getElementById("spd").innerText=Math.floor(sp*140);
+ document.getElementById("cr").innerText=crash;
 
- // UI
- document.getElementById("spd").innerText=Math.floor(speed*120);
- document.getElementById("cr").innerText=crashes;
-
- renderer.render(scene,camera);
+ r.render(scene,cam);
 }
 loop();
 
 onresize=()=>{
- camera.aspect=innerWidth/innerHeight;
- camera.updateProjectionMatrix();
- renderer.setSize(innerWidth,innerHeight);
+ cam.aspect=innerWidth/innerHeight;
+ cam.updateProjectionMatrix();
+ r.setSize(innerWidth,innerHeight);
 };
+
 </script>
 </body>
 </html>
 """
 
-st.components.v1.html(GAME_HTML, height=1000, scrolling=False)
+st.components.v1.html(GAME, height=1000, scrolling=False)
