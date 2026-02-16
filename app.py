@@ -1,6 +1,6 @@
 import streamlit as st
 
-st.set_page_config(page_title="Soft‑Body Pixel Car Crash", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="3D Pixel Car Crash", layout="wide", initial_sidebar_state="collapsed")
 
 # Ẩn giao diện Streamlit
 st.markdown("""
@@ -11,14 +11,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Toàn bộ game HTML (đã bao gồm JavaScript cải tiến)
+# Game HTML với Three.js 3D pixel
 GAME_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Soft‑Body Pixel Car Crash</title>
+    <title>3D Pixel Car Crash</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-tap-highlight-color: transparent; }
         body { background: black; overflow: hidden; touch-action: none; }
@@ -26,7 +26,7 @@ GAME_HTML = """
             display: block;
             width: 100vw;
             height: 100vh;
-            background: #1a2c2c;
+            background: #0a0a1a;
             image-rendering: pixelated;
             image-rendering: crisp-edges;
         }
@@ -91,6 +91,7 @@ GAME_HTML = """
             box-shadow: 0 0 15px #4fc3f7;
             touch-action: manipulation;
             font-weight: bold;
+            cursor: pointer;
         }
         .ctrl-btn:active {
             background: #4fc3f7;
@@ -107,7 +108,7 @@ GAME_HTML = """
     <canvas id="gameCanvas"></canvas>
 
     <div id="ui">
-        <div style="font-size: 18px; font-weight: bold; color: #4fc3f7;">💥 SOFT‑BODY CRASH</div>
+        <div style="font-size: 18px; font-weight: bold; color: #4fc3f7;">💥 3D PIXEL CRASH</div>
         <div>🏆 ĐIỂM: <span id="score">0</span></div>
         <div>💥 VA CHẠM: <span id="crashes">0</span></div>
         <div id="speedometer">⚡ <span id="speed">0</span> km/h</div>
@@ -133,308 +134,218 @@ GAME_HTML = """
         </div>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
         (function() {
+            // ---------- KHỞI TẠO THREE.JS ----------
             const canvas = document.getElementById('gameCanvas');
-            const ctx = canvas.getContext('2d');
+            const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-            // ---------- KÍCH THƯỚC CANVAS ----------
-            function resizeCanvas() {
-                canvas.width = window.innerWidth;
-                canvas.height = window.innerHeight;
-            }
-            resizeCanvas();
-            window.addEventListener('resize', resizeCanvas);
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a1a);
 
-            // ---------- THẾ GIỚI GAME ----------
-            const world = {
-                width: 3000,
-                height: 3000,
-                camera: { x: 0, y: 0 }
-            };
+            const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 15, 30);
+            camera.lookAt(0, 0, 0);
 
-            // ==================== SOFT‑BODY XE (CẢI TIẾN) ====================
-            class SoftCar {
-                constructor(x, y, color) {
-                    this.x = x; this.y = y;
-                    this.color = color;
-                    this.points = [];
-                    this.springs = [];
-                    
-                    // Tạo lưới 5x4 điểm
-                    const cols = 5, rows = 4;
-                    const w = 60, h = 40;
-                    for (let row = 0; row < rows; row++) {
-                        for (let col = 0; col < cols; col++) {
-                            this.points.push({
-                                x: (col / (cols-1) - 0.5) * w,
-                                y: (row / (rows-1) - 0.5) * h,
-                                px: 0, py: 0, // vị trí cũ cho Verlet
-                                vx: 0, vy: 0,
-                                mass: 1,
-                            });
-                        }
-                    }
-                    
-                    // Khởi tạo vị trí cũ bằng vị trí hiện tại
-                    for (let p of this.points) {
-                        p.px = p.x;
-                        p.py = p.y;
-                    }
-                    
-                    // Tạo lò xo với độ cứng cao và damping
-                    const strength = 1.5;  // tăng độ cứng để giữ hình dạng
-                    const damping = 0.3;
-                    
-                    // Lò xo dọc và ngang
-                    for (let row = 0; row < rows; row++) {
-                        for (let col = 0; col < cols; col++) {
-                            const idx = row * cols + col;
-                            if (col < cols-1) {
-                                const idx2 = row * cols + (col+1);
-                                this.addSpring(idx, idx2, strength, damping);
-                            }
-                            if (row < rows-1) {
-                                const idx2 = (row+1) * cols + col;
-                                this.addSpring(idx, idx2, strength, damping);
-                            }
-                        }
-                    }
-                    // Lò xo chéo (tăng độ cứng tổng thể)
-                    for (let row = 0; row < rows-1; row++) {
-                        for (let col = 0; col < cols-1; col++) {
-                            const idx = row * cols + col;
-                            const idx2 = (row+1) * cols + (col+1);
-                            this.addSpring(idx, idx2, strength*0.7, damping);
-                        }
-                    }
-                    
-                    // Đánh dấu bánh xe (các góc)
-                    this.wheelIndices = [0, cols-1, (rows-1)*cols, rows*cols-1];
-                    
-                    // Trạng thái hư hỏng
-                    this.damage = {
-                        engine: 100,
-                        doorL: 100,
-                        doorR: 100,
-                        wheelL: 100,
-                        wheelR: 100
-                    };
-                    
-                    // Khói
-                    this.smoke = [];
-                }
-                
-                addSpring(i, j, strength, damping) {
-                    const p1 = this.points[i];
-                    const p2 = this.points[j];
-                    const dx = p1.x - p2.x;
-                    const dy = p1.y - p2.y;
-                    const restLength = Math.hypot(dx, dy);
-                    this.springs.push({ i, j, restLength, strength, damping });
-                }
-                
-                // Verlet integration
-                verlet(dt) {
-                    for (let p of this.points) {
-                        const vx = p.x - p.px;
-                        const vy = p.y - p.py;
-                        p.px = p.x;
-                        p.py = p.y;
-                        p.x += vx + p.vx * dt;
-                        p.y += vy + p.vy * dt;
-                        // reset lực
-                        p.vx = 0;
-                        p.vy = 0;
-                    }
-                }
-                
-                // Tính lực lò xo
-                applySpringForces() {
-                    for (let s of this.springs) {
-                        const p1 = this.points[s.i];
-                        const p2 = this.points[s.j];
-                        const dx = p2.x - p1.x;
-                        const dy = p2.y - p1.y;
-                        const dist = Math.hypot(dx, dy);
-                        if (dist === 0) continue;
-                        const force = (dist - s.restLength) * s.strength;
-                        const nx = dx / dist;
-                        const ny = dy / dist;
-                        
-                        // Lực tác dụng lên vận tốc (Verlet sẽ dùng để cập nhật vị trí)
-                        p1.vx += nx * force * 0.5;
-                        p1.vy += ny * force * 0.5;
-                        p2.vx -= nx * force * 0.5;
-                        p2.vy -= ny * force * 0.5;
-                        
-                        // Damping (lực cản nhớt)
-                        const vdx = p2.vx - p1.vx;
-                        const vdy = p2.vy - p1.vy;
-                        p1.vx += vdx * s.damping;
-                        p1.vy += vdy * s.damping;
-                        p2.vx -= vdx * s.damping;
-                        p2.vy -= vdy * s.damping;
-                    }
-                }
-                
-                // Cập nhật tổng thể
-                update(dt) {
-                    this.applySpringForces();
-                    this.verlet(dt);
-                    
-                    // Giới hạn trong thế giới (phản xạ)
-                    for (let p of this.points) {
-                        if (p.x < 0) { p.x = 0; p.px = p.x + (p.x - p.px)*0.5; }
-                        if (p.x > world.width) { p.x = world.width; p.px = p.x + (p.x - p.px)*0.5; }
-                        if (p.y < 0) { p.y = 0; p.py = p.y + (p.y - p.py)*0.5; }
-                        if (p.y > world.height) { p.y = world.height; p.py = p.y + (p.y - p.py)*0.5; }
-                    }
-                    
-                    // Tính tâm xe (để camera)
-                    this.x = 0; this.y = 0;
-                    for (let p of this.points) {
-                        this.x += p.x;
-                        this.y += p.y;
-                    }
-                    this.x /= this.points.length;
-                    this.y /= this.points.length;
-                    
-                    // Tính hư hỏng dựa trên độ biến dạng của các lò xo (đơn giản)
-                    let engineStress = 0;
-                    for (let s of this.springs) {
-                        const p1 = this.points[s.i];
-                        const p2 = this.points[s.j];
-                        const dx = p2.x - p1.x;
-                        const dy = p2.y - p1.y;
-                        const dist = Math.hypot(dx, dy);
-                        const stretch = Math.abs(dist - s.restLength) / s.restLength;
-                        engineStress += stretch;
-                    }
-                    engineStress /= this.springs.length;
-                    
-                    // Giảm máu động cơ nhẹ nhàng
-                    this.damage.engine = Math.max(0, this.damage.engine - engineStress * 0.5);
-                    
-                    // Tạo khói nếu động cơ yếu
-                    if (this.damage.engine < 40 && Math.random() < 0.1) {
-                        this.smoke.push({
-                            x: this.x + (Math.random()-0.5)*30,
-                            y: this.y + (Math.random()-0.5)*30,
-                            vx: (Math.random()-0.5)*0.5,
-                            vy: -Math.random()*1,
-                            life: 1.0,
-                            size: 5+Math.random()*8
-                        });
-                    }
-                    // Lọc khói
-                    this.smoke = this.smoke.filter(p => {
-                        p.x += p.vx;
-                        p.y += p.vy;
-                        p.life -= 0.01;
-                        return p.life > 0;
-                    });
-                }
-                
-                // Vẽ bằng pixel (mỗi điểm là một pixel vuông)
-                draw(ctx, offX, offY) {
-                    const cellSize = 3; // kích thước mỗi pixel (phóng to để dễ thấy)
-                    for (let p of this.points) {
-                        ctx.fillStyle = this.color;
-                        ctx.fillRect(offX + p.x - cellSize/2, offY + p.y - cellSize/2, cellSize, cellSize);
-                    }
-                    // Vẽ bánh xe (các góc)
-                    ctx.fillStyle = '#222';
-                    for (let idx of this.wheelIndices) {
-                        const p = this.points[idx];
-                        ctx.beginPath();
-                        ctx.arc(offX + p.x, offY + p.y, 4, 0, 2*Math.PI);
-                        ctx.fill();
-                    }
-                    // Vẽ khói
-                    ctx.globalAlpha = 0.5;
-                    for (let p of this.smoke) {
-                        ctx.fillStyle = '#888';
-                        ctx.beginPath();
-                        ctx.arc(offX + p.x, offY + p.y, p.size * p.life, 0, 2*Math.PI);
-                        ctx.fill();
-                    }
-                    ctx.globalAlpha = 1.0;
-                }
-                
-                // Điều khiển: tác động lực lên các điểm phía sau
-                applyControl(direction, strength) {
-                    const cols = 5, rows = 4;
-                    // direction: 0=tiến, 1=lùi, 2=trái, 3=phải
-                    if (direction === 0) { // tiến
-                        for (let col = 1; col < cols-1; col++) {
-                            const idx = (rows-1) * cols + col; // hàng sau
-                            const p = this.points[idx];
-                            p.vx += Math.sin(this.angle) * strength;
-                            p.vy += Math.cos(this.angle) * strength;
-                        }
-                    } else if (direction === 1) { // lùi
-                        for (let col = 1; col < cols-1; col++) {
-                            const idx = (rows-1) * cols + col;
-                            const p = this.points[idx];
-                            p.vx -= Math.sin(this.angle) * strength * 0.6;
-                            p.vy -= Math.cos(this.angle) * strength * 0.6;
-                        }
-                    } else if (direction === 2) { // trái
-                        for (let row = 0; row < rows; row++) {
-                            const idx = row * cols; // cột trái
-                            const p = this.points[idx];
-                            p.vx -= strength * 2;
-                        }
-                    } else if (direction === 3) { // phải
-                        for (let row = 0; row < rows; row++) {
-                            const idx = row * cols + (cols-1); // cột phải
-                            const p = this.points[idx];
-                            p.vx += strength * 2;
-                        }
-                    }
-                }
-                
-                // Phanh tay: tăng ma sát các điểm bánh
-                handbrake() {
-                    for (let idx of this.wheelIndices) {
-                        const p = this.points[idx];
-                        p.vx *= 0.7;
-                        p.vy *= 0.7;
-                    }
-                }
-            }
+            // ---------- ÁNH SÁNG ----------
+            const ambientLight = new THREE.AmbientLight(0x404060);
+            scene.add(ambientLight);
 
-            // Tạo xe người chơi
-            const player = new SoftCar(1500, 1500, '#2277cc');
-            // Góc quay ban đầu (tính từ vận tốc, nhưng soft-body không có góc cố định)
-            player.angle = 0; // thêm thuộc tính để điều khiển
-            
-            // Tạo xe AI (cũng dùng soft-body nhưng số lượng ít để giữ hiệu suất)
-            const aiCars = [];
-            for (let i = 0; i < 3; i++) {
-                aiCars.push(new SoftCar(1000+Math.random()*1000, 1000+Math.random()*1000, '#cc4444'));
+            const dirLight = new THREE.DirectionalLight(0xffeedd, 1.2);
+            dirLight.position.set(10, 20, 10);
+            dirLight.castShadow = true;
+            dirLight.receiveShadow = true;
+            dirLight.shadow.mapSize.width = 1024;
+            dirLight.shadow.mapSize.height = 1024;
+            const d = 50;
+            dirLight.shadow.camera.left = -d;
+            dirLight.shadow.camera.right = d;
+            dirLight.shadow.camera.top = d;
+            dirLight.shadow.camera.bottom = -d;
+            dirLight.shadow.camera.near = 1;
+            dirLight.shadow.camera.far = 50;
+            scene.add(dirLight);
+
+            const pointLight = new THREE.PointLight(0x4466ff, 0.5);
+            pointLight.position.set(-5, 5, 10);
+            scene.add(pointLight);
+
+            // ---------- MẶT ĐẤT ----------
+            const groundGeo = new THREE.PlaneGeometry(200, 200);
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x1a2a2a, roughness: 0.8 });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -0.5;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // Đường kẻ (dùng hình hộp nhỏ)
+            const lineMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+            for (let i = -90; i <= 90; i += 20) {
+                const line = new THREE.Mesh(new THREE.BoxGeometry(1, 0.1, 10), lineMat);
+                line.position.set(i, -0.45, 0);
+                line.receiveShadow = true;
+                scene.add(line);
+                
+                const line2 = new THREE.Mesh(new THREE.BoxGeometry(10, 0.1, 1), lineMat);
+                line2.position.set(0, -0.45, i);
+                line2.receiveShadow = true;
+                scene.add(line2);
             }
 
             // ---------- VẬT CẢN ----------
             const obstacles = [];
-            // Tường
-            obstacles.push({ x: world.width/2, y: -25, w: world.width, h: 50 });
-            obstacles.push({ x: world.width/2, y: world.height+25, w: world.width, h: 50 });
-            obstacles.push({ x: -25, y: world.height/2, w: 50, h: world.height });
-            obstacles.push({ x: world.width+25, y: world.height/2, w: 50, h: world.height });
-            // Cây cối, nhà
-            for (let i = 0; i < 20; i++) {
-                obstacles.push({
-                    x: 200+Math.random()*2600,
-                    y: 200+Math.random()*2600,
-                    w: 30+Math.random()*30,
-                    h: 30+Math.random()*30,
-                    color: `rgb(${30+Math.random()*50},${50+Math.random()*50},${20})`
+            function createObstacle(x, z, color) {
+                const box = new THREE.Mesh(
+                    new THREE.BoxGeometry(4, 2, 4),
+                    new THREE.MeshStandardMaterial({ color })
+                );
+                box.position.set(x, 0.5, z);
+                box.castShadow = true;
+                box.receiveShadow = true;
+                scene.add(box);
+                obstacles.push(box);
+            }
+            
+            // Tường bao
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0x884422 });
+            const walls = [
+                new THREE.Mesh(new THREE.BoxGeometry(200, 5, 5), wallMat),
+                new THREE.Mesh(new THREE.BoxGeometry(200, 5, 5), wallMat),
+                new THREE.Mesh(new THREE.BoxGeometry(5, 5, 200), wallMat),
+                new THREE.Mesh(new THREE.BoxGeometry(5, 5, 200), wallMat)
+            ];
+            walls[0].position.set(0, 1, -100);
+            walls[1].position.set(0, 1, 100);
+            walls[2].position.set(-100, 1, 0);
+            walls[3].position.set(100, 1, 0);
+            walls.forEach(w => { w.castShadow = true; w.receiveShadow = true; scene.add(w); });
+            
+            // Vật cản rải rác
+            for (let i = 0; i < 15; i++) {
+                createObstacle(
+                    (Math.random() - 0.5) * 160,
+                    (Math.random() - 0.5) * 160,
+                    Math.random() * 0xffffff
+                );
+            }
+
+            // ---------- XE PLAYER (PIXEL 3D) ----------
+            const playerGroup = new THREE.Group();
+            
+            // Thân xe chính (tạo từ các pixel)
+            const pixelMat = new THREE.MeshStandardMaterial({ color: 0x2277cc });
+            const pixelSize = 2;
+            const positions = [
+                [-3, 0, -5], [-1, 0, -5], [1, 0, -5], [3, 0, -5],
+                [-4, 1, -3], [-2, 1, -3], [0, 1, -3], [2, 1, -3], [4, 1, -3],
+                [-4, 2, -1], [-2, 2, -1], [0, 2, -1], [2, 2, -1], [4, 2, -1],
+                [-3, 3, 1], [-1, 3, 1], [1, 3, 1], [3, 3, 1],
+                [-2, 2, 3], [0, 2, 3], [2, 2, 3],
+                [-1, 1, 5], [1, 1, 5]
+            ];
+            
+            positions.forEach(pos => {
+                const pixel = new THREE.Mesh(
+                    new THREE.BoxGeometry(pixelSize, pixelSize, pixelSize),
+                    new THREE.MeshStandardMaterial({ color: 0x2277cc })
+                );
+                pixel.position.set(pos[0], pos[1], pos[2]);
+                pixel.castShadow = true;
+                pixel.receiveShadow = true;
+                playerGroup.add(pixel);
+            });
+            
+            // Bánh xe
+            const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+            const wheelPos = [[-4, 0, -6], [4, 0, -6], [-4, 0, 6], [4, 0, 6]];
+            wheelPos.forEach(pos => {
+                const wheel = new THREE.Mesh(
+                    new THREE.CylinderGeometry(1.5, 1.5, 1, 8),
+                    wheelMat
+                );
+                wheel.rotation.z = Math.PI/2;
+                wheel.position.set(pos[0], pos[1], pos[2]);
+                wheel.castShadow = true;
+                wheel.receiveShadow = true;
+                playerGroup.add(wheel);
+            });
+            
+            // Đèn
+            const lightMat = new THREE.MeshStandardMaterial({ color: 0xffffaa, emissive: 0x442200 });
+            const headLights = [[-3, 1, -7], [3, 1, -7]];
+            headLights.forEach(pos => {
+                const light = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), lightMat);
+                light.position.set(pos[0], pos[1], pos[2]);
+                light.castShadow = true;
+                playerGroup.add(light);
+            });
+            
+            playerGroup.position.set(0, 1, 0);
+            scene.add(playerGroup);
+
+            // ---------- XE AI ----------
+            const aiCars = [];
+            const aiColors = [0xff3333, 0x33ff33, 0xffaa00, 0xff44aa, 0x44aaff];
+            for (let i = 0; i < 5; i++) {
+                const aiGroup = new THREE.Group();
+                const color = aiColors[i % aiColors.length];
+                
+                // Thân AI (đơn giản hơn)
+                for (let x = -3; x <= 3; x+=2) {
+                    for (let z = -5; z <= 5; z+=2) {
+                        const pixel = new THREE.Mesh(
+                            new THREE.BoxGeometry(1.5, 1.5, 1.5),
+                            new THREE.MeshStandardMaterial({ color })
+                        );
+                        pixel.position.set(x, 0.5, z);
+                        pixel.castShadow = true;
+                        pixel.receiveShadow = true;
+                        aiGroup.add(pixel);
+                    }
+                }
+                
+                aiGroup.position.set(
+                    (Math.random() - 0.5) * 150,
+                    1,
+                    (Math.random() - 0.5) * 150
+                );
+                scene.add(aiGroup);
+                aiCars.push({
+                    mesh: aiGroup,
+                    vx: (Math.random() - 0.5) * 0.2,
+                    vz: (Math.random() - 0.5) * 0.2,
+                    color: color
                 });
             }
 
-            // ---------- ĐIỀU KHIỂN ----------
+            // ---------- HỆ THỐNG PARTICLE ----------
+            const particles = [];
+            function createCrashParticles(x, y, z, color) {
+                for (let i = 0; i < 20; i++) {
+                    const size = Math.random() * 0.5 + 0.2;
+                    const particle = new THREE.Mesh(
+                        new THREE.BoxGeometry(size, size, size),
+                        new THREE.MeshStandardMaterial({ color, emissive: 0x442200 })
+                    );
+                    particle.position.set(x, y, z);
+                    particle.userData = {
+                        vx: (Math.random() - 0.5) * 0.5,
+                        vy: Math.random() * 0.5,
+                        vz: (Math.random() - 0.5) * 0.5,
+                        life: 1.0
+                    };
+                    scene.add(particle);
+                    particles.push(particle);
+                }
+            }
+
+            // ---------- BIẾN ĐIỀU KHIỂN ----------
             const keys = { up: false, down: false, left: false, right: false, space: false };
             
             // PC keyboard
@@ -470,237 +381,230 @@ GAME_HTML = """
                     e.preventDefault();
                     keys[key] = false;
                 });
-                // Mouse events for testing on PC
                 btn.addEventListener('mousedown', (e) => { e.preventDefault(); keys[key] = true; });
                 btn.addEventListener('mouseup', (e) => { e.preventDefault(); keys[key] = false; });
                 btn.addEventListener('mouseleave', (e) => { keys[key] = false; });
             });
+
+            // ---------- VẬT LÝ ----------
+            const player = {
+                mesh: playerGroup,
+                vx: 0, vz: 0,
+                angle: 0,
+                maxSpeed: 0.5,
+                acceleration: 0.02,
+                turnSpeed: 0.02,
+                health: 100,
+                engineHealth: 100,
+                doorL: 100,
+                doorR: 100,
+                wheelL: 100,
+                wheelR: 100
+            };
 
             // ---------- GAME STATE ----------
             let score = 0;
             let totalCrashes = 0;
             let gameRunning = true;
 
-            // ---------- VA CHẠM (CHỈ TÍNH KHI VẬN TỐC ĐỦ LỚN) ----------
-            function handleCollisions() {
-                const threshold = 1.5; // ngưỡng vận tốc tương đối để tính va chạm
-                
-                // Player vs AI cars
-                for (let ai of aiCars) {
-                    for (let pi of player.points) {
-                        for (let pj of ai.points) {
-                            const dx = pi.x - pj.x;
-                            const dy = pi.y - pj.y;
-                            const dist = Math.hypot(dx, dy);
-                            if (dist < 10) { // khoảng cách va chạm
-                                // Tính vận tốc tương đối
-                                const vRelX = pi.vx - pj.vx;
-                                const vRelY = pi.vy - pj.vy;
-                                const vRel = Math.hypot(vRelX, vRelY);
-                                
-                                if (vRel > threshold) {
-                                    // Tạo phản lực
-                                    const nx = dx / (dist || 1);
-                                    const ny = dy / (dist || 1);
-                                    const force = vRel * 0.8;
-                                    pi.vx += nx * force;
-                                    pi.vy += ny * force;
-                                    pj.vx -= nx * force;
-                                    pj.vy -= ny * force;
-                                    
-                                    totalCrashes++;
-                                    score += Math.floor(vRel * 10);
-                                    
-                                    // Làm hỏng động cơ (tạm thời)
-                                    player.damage.engine = Math.max(0, player.damage.engine - vRel * 2);
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // Player vs obstacles (hình chữ nhật)
-                for (let obs of obstacles) {
-                    for (let p of player.points) {
-                        if (p.x > obs.x - obs.w/2 && p.x < obs.x + obs.w/2 &&
-                            p.y > obs.y - obs.h/2 && p.y < obs.y + obs.h/2) {
+            // ---------- VA CHẠM ----------
+            function checkCollisions() {
+                // Player vs AI (đơn giản: khoảng cách)
+                aiCars.forEach(ai => {
+                    const dx = player.mesh.position.x - ai.mesh.position.x;
+                    const dz = player.mesh.position.z - ai.mesh.position.z;
+                    const dist = Math.sqrt(dx*dx + dz*dz);
+                    if (dist < 8) {
+                        const speed = Math.sqrt(player.vx*player.vx + player.vz*player.vz);
+                        if (speed > 0.1) {
+                            createCrashParticles(
+                                (player.mesh.position.x + ai.mesh.position.x)/2,
+                                1,
+                                (player.mesh.position.z + ai.mesh.position.z)/2,
+                                0xffaa00
+                            );
+                            player.engineHealth -= speed * 10;
+                            score += Math.floor(speed * 20);
+                            totalCrashes++;
                             
-                            const speed = Math.hypot(p.vx, p.vy);
-                            if (speed > threshold) {
-                                // Đẩy điểm ra khỏi vật cản
-                                const left = p.x - (obs.x - obs.w/2);
-                                const right = (obs.x + obs.w/2) - p.x;
-                                const top = p.y - (obs.y - obs.h/2);
-                                const bottom = (obs.y + obs.h/2) - p.y;
-                                
-                                const minX = Math.min(left, right);
-                                const minY = Math.min(top, bottom);
-                                
-                                if (minX < minY) {
-                                    if (left < right) {
-                                        p.x = obs.x - obs.w/2 - 2;
-                                        p.vx = -Math.abs(p.vx) * 0.3;
-                                    } else {
-                                        p.x = obs.x + obs.w/2 + 2;
-                                        p.vx = Math.abs(p.vx) * 0.3;
-                                    }
-                                } else {
-                                    if (top < bottom) {
-                                        p.y = obs.y - obs.h/2 - 2;
-                                        p.vy = -Math.abs(p.vy) * 0.3;
-                                    } else {
-                                        p.y = obs.y + obs.h/2 + 2;
-                                        p.vy = Math.abs(p.vy) * 0.3;
-                                    }
-                                }
-                                
-                                totalCrashes++;
-                                score += Math.floor(speed * 5);
-                                player.damage.engine = Math.max(0, player.damage.engine - speed * 1.5);
+                            // Đẩy
+                            if (dist > 0) {
+                                const nx = dx / dist;
+                                const nz = dz / dist;
+                                player.mesh.position.x += nx * 2;
+                                player.mesh.position.z += nz * 2;
+                                ai.mesh.position.x -= nx * 2;
+                                ai.mesh.position.z -= nz * 2;
+                                player.vx = -player.vx * 0.3;
+                                player.vz = -player.vz * 0.3;
+                                ai.vx = -ai.vx * 0.3;
+                                ai.vz = -ai.vz * 0.3;
                             }
                         }
                     }
-                }
+                });
+                
+                // Player vs obstacles
+                obstacles.forEach(obs => {
+                    const dx = player.mesh.position.x - obs.position.x;
+                    const dz = player.mesh.position.z - obs.position.z;
+                    const dist = Math.sqrt(dx*dx + dz*dz);
+                    if (dist < 6) {
+                        const speed = Math.sqrt(player.vx*player.vx + player.vz*player.vz);
+                        if (speed > 0.1) {
+                            createCrashParticles(
+                                (player.mesh.position.x + obs.position.x)/2,
+                                1,
+                                (player.mesh.position.z + obs.position.z)/2,
+                                0xff5500
+                            );
+                            player.engineHealth -= speed * 8;
+                            score += Math.floor(speed * 10);
+                            totalCrashes++;
+                            
+                            if (dist > 0) {
+                                const nx = dx / dist;
+                                const nz = dz / dist;
+                                player.mesh.position.x += nx * 3;
+                                player.mesh.position.z += nz * 3;
+                                player.vx = -player.vx * 0.2;
+                                player.vz = -player.vz * 0.2;
+                            }
+                        }
+                    }
+                });
             }
 
-            // ---------- CẬP NHẬT GÓC XE (cho điều khiển) ----------
-            function updatePlayerAngle() {
-                // Tính góc từ vận tốc trung bình của các điểm
-                let avgVx = 0, avgVy = 0;
-                for (let p of player.points) {
-                    avgVx += p.vx;
-                    avgVy += p.vy;
-                }
-                avgVx /= player.points.length;
-                avgVy /= player.points.length;
-                if (Math.hypot(avgVx, avgVy) > 0.1) {
-                    player.angle = Math.atan2(avgVx, avgVy);
-                }
-            }
-
-            // ---------- CAMERA FOLLOW ----------
+            // ---------- CẬP NHẬT CAMERA ----------
             function updateCamera() {
-                world.camera.x = player.x - canvas.width/2;
-                world.camera.y = player.y - canvas.height/2;
-                world.camera.x = Math.max(0, Math.min(world.width - canvas.width, world.camera.x));
-                world.camera.y = Math.max(0, Math.min(world.height - canvas.height, world.camera.y));
-            }
-
-            // ---------- VẼ ----------
-            function draw() {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                
-                const offX = -world.camera.x;
-                const offY = -world.camera.y;
-                
-                // Nền
-                ctx.fillStyle = '#1a2c2c';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                
-                // Lưới đường
-                ctx.strokeStyle = '#3a5a5a';
-                ctx.lineWidth = 1;
-                const grid = 100;
-                const startX = Math.floor(world.camera.x / grid) * grid;
-                const startY = Math.floor(world.camera.y / grid) * grid;
-                for (let x = startX; x < world.camera.x + canvas.width; x += grid) {
-                    ctx.beginPath();
-                    ctx.moveTo(x - world.camera.x, 0);
-                    ctx.lineTo(x - world.camera.x, canvas.height);
-                    ctx.stroke();
-                }
-                for (let y = startY; y < world.camera.y + canvas.height; y += grid) {
-                    ctx.beginPath();
-                    ctx.moveTo(0, y - world.camera.y);
-                    ctx.lineTo(canvas.width, y - world.camera.y);
-                    ctx.stroke();
-                }
-                
-                // Vẽ vật cản
-                for (let obs of obstacles) {
-                    ctx.fillStyle = obs.color || '#6b4e3a';
-                    ctx.fillRect(obs.x - obs.w/2 - world.camera.x, obs.y - obs.h/2 - world.camera.y, obs.w, obs.h);
-                }
-                
-                // Vẽ xe AI
-                for (let ai of aiCars) {
-                    ai.draw(ctx, offX, offY);
-                }
-                
-                // Vẽ xe player
-                player.draw(ctx, offX, offY);
+                camera.position.x = player.mesh.position.x;
+                camera.position.z = player.mesh.position.z + 25;
+                camera.position.y = player.mesh.position.y + 10;
+                camera.lookAt(player.mesh.position.x, player.mesh.position.y + 2, player.mesh.position.z);
             }
 
             // ---------- CẬP NHẬT UI ----------
             function updateUI() {
                 document.getElementById('score').innerText = Math.floor(score);
                 document.getElementById('crashes').innerText = totalCrashes;
-                // Tính tốc độ trung bình
-                let sp = 0;
-                for (let p of player.points) sp += Math.hypot(p.vx, p.vy);
-                sp = (sp / player.points.length) * 20;
-                document.getElementById('speed').innerText = Math.floor(sp);
+                const speed = Math.sqrt(player.vx*player.vx + player.vz*player.vz) * 50;
+                document.getElementById('speed').innerText = Math.floor(speed);
                 
-                document.getElementById('engine-health').style.width = player.damage.engine + '%';
-                document.getElementById('doorL-health').style.width = player.damage.doorL + '%';
-                document.getElementById('doorR-health').style.width = player.damage.doorR + '%';
-                document.getElementById('wheelL-health').style.width = player.damage.wheelL + '%';
-                document.getElementById('wheelR-health').style.width = player.damage.wheelR + '%';
+                document.getElementById('engine-health').style.width = Math.max(0, player.engineHealth) + '%';
+                document.getElementById('doorL-health').style.width = player.doorL + '%';
+                document.getElementById('doorR-health').style.width = player.doorR + '%';
+                document.getElementById('wheelL-health').style.width = player.wheelL + '%';
+                document.getElementById('wheelR-health').style.width = player.wheelR + '%';
             }
 
             // ---------- GAME LOOP ----------
-            let lastTime = 0;
-            function gameLoop(now) {
+            function gameLoop() {
                 if (!gameRunning) return;
                 
-                const dt = Math.min(0.05, (now - lastTime) / 1000);
-                lastTime = now;
-                
-                // Điều khiển (tác động lực lên các điểm)
-                const force = 0.8;
-                if (keys.up) player.applyControl(0, force);
-                if (keys.down) player.applyControl(1, force);
-                if (keys.left) player.applyControl(2, force);
-                if (keys.right) player.applyControl(3, force);
-                if (keys.space) player.handbrake();
-                
-                // Cập nhật góc xe để điều khiển hướng
-                updatePlayerAngle();
-                
-                // Cập nhật vật lý cho player
-                player.update(dt);
-                
-                // Cập nhật vật lý cho AI (đơn giản)
-                for (let ai of aiCars) {
-                    // AI di chuyển ngẫu nhiên nhẹ
-                    if (Math.random() < 0.01) {
-                        ai.applyControl(Math.floor(Math.random()*2), 0.5);
-                    }
-                    ai.update(dt);
+                // Điều khiển
+                if (keys.up) {
+                    player.vx += Math.sin(player.angle) * player.acceleration;
+                    player.vz += Math.cos(player.angle) * player.acceleration;
+                }
+                if (keys.down) {
+                    player.vx -= Math.sin(player.angle) * player.acceleration * 0.6;
+                    player.vz -= Math.cos(player.angle) * player.acceleration * 0.6;
+                }
+                if (keys.left) {
+                    player.angle += player.turnSpeed;
+                }
+                if (keys.right) {
+                    player.angle -= player.turnSpeed;
+                }
+                if (keys.space) {
+                    player.vx *= 0.95;
+                    player.vz *= 0.95;
                 }
                 
+                // Giới hạn tốc độ
+                let speed = Math.sqrt(player.vx*player.vx + player.vz*player.vz);
+                if (speed > player.maxSpeed) {
+                    player.vx = (player.vx / speed) * player.maxSpeed;
+                    player.vz = (player.vz / speed) * player.maxSpeed;
+                }
+                
+                // Ma sát
+                player.vx *= 0.98;
+                player.vz *= 0.98;
+                
+                // Cập nhật vị trí
+                player.mesh.position.x += player.vx;
+                player.mesh.position.z += player.vz;
+                player.mesh.rotation.y = player.angle;
+                
+                // Giới hạn map
+                const bound = 90;
+                player.mesh.position.x = Math.max(-bound, Math.min(bound, player.mesh.position.x));
+                player.mesh.position.z = Math.max(-bound, Math.min(bound, player.mesh.position.z));
+                
+                // AI di chuyển
+                aiCars.forEach(ai => {
+                    ai.vx += (Math.random() - 0.5) * 0.02;
+                    ai.vz += (Math.random() - 0.5) * 0.02;
+                    let sp = Math.sqrt(ai.vx*ai.vx + ai.vz*ai.vz);
+                    if (sp > 0.2) {
+                        ai.vx = (ai.vx / sp) * 0.2;
+                        ai.vz = (ai.vz / sp) * 0.2;
+                    }
+                    ai.mesh.position.x += ai.vx;
+                    ai.mesh.position.z += ai.vz;
+                    if (sp > 0.01) {
+                        ai.mesh.rotation.y = Math.atan2(ai.vx, ai.vz);
+                    }
+                    ai.mesh.position.x = Math.max(-bound, Math.min(bound, ai.mesh.position.x));
+                    ai.mesh.position.z = Math.max(-bound, Math.min(bound, ai.mesh.position.z));
+                });
+                
                 // Va chạm
-                handleCollisions();
+                checkCollisions();
+                
+                // Particles
+                particles.forEach((p, index) => {
+                    p.userData.life -= 0.01;
+                    if (p.userData.life <= 0) {
+                        scene.remove(p);
+                        particles.splice(index, 1);
+                    } else {
+                        p.position.x += p.userData.vx;
+                        p.position.y += p.userData.vy;
+                        p.position.z += p.userData.vz;
+                        p.userData.vy -= 0.005;
+                        p.scale.setScalar(p.userData.life);
+                    }
+                });
                 
                 // Camera
                 updateCamera();
                 
-                // Vẽ
-                draw();
+                // UI
                 updateUI();
                 
                 // Game over
-                if (player.damage.engine <= 0) {
+                if (player.engineHealth <= 0) {
                     gameRunning = false;
-                    alert('💥 GAME OVER! Điểm: ' + Math.floor(score));
-                    location.reload();
+                    setTimeout(() => {
+                        alert('💥 GAME OVER! ĐIỂM: ' + Math.floor(score));
+                        location.reload();
+                    }, 100);
                 }
                 
+                renderer.render(scene, camera);
                 requestAnimationFrame(gameLoop);
             }
+            
+            gameLoop();
 
-            lastTime = performance.now();
-            requestAnimationFrame(gameLoop);
+            // ---------- RESIZE ----------
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
         })();
     </script>
 </body>
